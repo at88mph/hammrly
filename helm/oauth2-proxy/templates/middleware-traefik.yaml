@@ -1,0 +1,33 @@
+{{- if and .Values.enabled (eq (.Values.authProfile | default "traefik") "traefik") -}}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "oauth2-proxy.middlewareAuthName" . }}
+  labels:
+    {{- include "oauth2-proxy.labels" . | nindent 4 }}
+spec:
+  forwardAuth:
+    address: {{ printf "%s/oauth2/auth" (include "oauth2-proxy.serviceUrl" .) | quote }}
+    trustForwardHeader: true
+    authResponseHeaders:
+      - Authorization
+      - X-Auth-Request-User
+      - X-Auth-Request-Email
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "oauth2-proxy.middlewareErrorsName" . }}
+  labels:
+    {{- include "oauth2-proxy.labels" . | nindent 4 }}
+spec:
+  errors:
+    status:
+      - "401-403"
+    service:
+      name: {{ include "oauth2-proxy.fullname" . }}
+      port: {{ .Values.service.port }}
+    query: "/oauth2/sign_in?rd={url}"
+    statusRewrites:
+      "401": 302
+{{- end }}

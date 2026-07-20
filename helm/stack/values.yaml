@@ -1,0 +1,106 @@
+# Umbrella values for all three services. Override in your own values file or with -f.
+#
+# HTTP path prefix: set per subchart (gateway.httpPathPrefix, query.httpPathPrefix).
+# Do NOT set httpPathPrefix at this file's top level — Helm will not pass it to children.
+# Use the same value as your ingress path Prefix (e.g. /hammrly/gateway). Container
+# images must include support for HAMMRLY_HTTP_PATH_PREFIX.
+
+gateway:
+  redisUrl: "redis://redis:6379/0"
+  ephemeralStorage:
+    default: 20
+    max: 20
+  queryPublicBaseUrl: "https://sessions.example.com/hammrly/query"
+  # e.g. match ingress path /hammrly/gateway (Prefix)
+  # httpPathPrefix: "/hammrly/gateway"
+  jwt:
+    devHmacSecret: ""
+    jwksUrl: ""
+    requiredScopes: "hammrly:jobs:submit"
+  image:
+    repository: registry.gitlab.com/djenkins.cadc/hammrly/gateway
+    tag: 0.1.0-rc.22
+orchestrator:
+  redisUrl: "redis://redis:6379/0"
+  ephemeralStorage:
+    default: 20
+    max: 20
+  jobSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  workspace:
+    mountPath: /workspace
+    transferImage: python:3.12-alpine
+    completionFile: hammrly-complete.json
+    errorFile: hammrly-error.json
+  database:
+    url: "postgresql+psycopg2://example.db.host:5432/hammrly"
+    existingSecret: "hammrly-orchestrator-db"
+    secretKeys:
+      username: username
+      password: password
+  k8sSubmitEnabled: true
+  jobWatchEnabled: true
+  podWatchEnabled: true
+  k8sWorkloadNamespace: ""
+  ingress:
+    host: sessions.example.com
+    pathPrefix: /hammrly
+  desktop:
+    shmDefault: "1Gi"
+  session:
+    kueue:
+      localQueueDefault: "kawfee-default"
+    kinds:
+      desktop:
+        ingress:
+          pathTemplate: "/hammrly/sessions/desktop/{submission_id}/"
+      notebook:
+        ingress:
+          pathTemplate: "/hammrly/sessions/notebook/{submission_id}/"
+  clusterId: "default"
+  image:
+    repository: registry.gitlab.com/djenkins.cadc/hammrly/orchestrator
+    tag: 0.1.0-rc.22
+query:
+  redisUrl: "redis://redis:6379/0"
+  database:
+    url: "postgresql+psycopg2://example.db.host:5432/hammrly"
+    existingSecret: "hammrly-orchestrator-db"
+    secretKeys:
+      username: username
+      password: password
+  # e.g. match ingress path /hammrly/query (Prefix)
+  # httpPathPrefix: "/hammrly/query"
+  jwt:
+    devHmacSecret: ""
+    jwksUrl: ""
+    requiredScopes: "hammrly:jobs:read"
+  clusterId: "default"
+  image:
+    repository: registry.gitlab.com/djenkins.cadc/hammrly/query
+    tag: 0.1.0-rc.22
+catalog:
+  tap:
+    syncUrl: "https://example.tap.host/tap/sync"
+  # e.g. match ingress path /hammrly/catalog (Prefix)
+  # httpPathPrefix: "/hammrly/catalog"
+  jwt:
+    devHmacSecret: ""
+    jwksUrl: ""
+    requiredScopes: "hammrly:catalog:read"
+  image:
+    repository: registry.gitlab.com/djenkins.cadc/hammrly/catalog
+    tag: 0.1.0-rc.22
+portal:
+  config:
+    queryBaseUrl: "https://sessions.example.com/hammrly/query"
+    gatewayBaseUrl: "https://sessions.example.com/hammrly/gateway"
+    catalogBaseUrl: "https://sessions.example.com/hammrly/catalog"
+    defaultSearchTerms:
+      - desktop
+    imageMap: {}
+    oidcProviders: []
+  image:
+    repository: registry.gitlab.com/djenkins.cadc/hammrly/portal
+    tag: 0.1.0-rc.22

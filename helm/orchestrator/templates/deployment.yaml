@@ -1,0 +1,173 @@
+{{- $wlNs := include "hammrly-orchestrator.workloadNamespace" . -}}
+{{- $watchNs := .Values.jobWatchNamespace | default $wlNs -}}
+{{- $db := .Values.database -}}
+{{- $dbMode := include "hammrly-orchestrator.databaseMode" . | trim -}}
+{{- if eq $dbMode "invalid" -}}
+{{- fail "orchestrator.database: set database.url to a full DSN (must contain ://) for dev, or set database.existingSecret with secretKeys.username/password and database.url as host:port/dbname" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hammrly-orchestrator.fullname" . }}
+  labels:
+    {{- include "hammrly-orchestrator.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.hpa.enabled }}
+  replicas: {{ .Values.hpa.minReplicas }}
+  {{- else }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "hammrly-orchestrator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hammrly-orchestrator.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $sa := include "hammrly-orchestrator.serviceAccountName" . }}
+      {{- if $sa }}
+      serviceAccountName: {{ $sa }}
+      {{- end }}
+      containers:
+        - name: orchestrator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if eq $dbMode "assembled" }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              export HAMMRLY_DATABASE_URL="postgresql+psycopg2://${HAMMRLY_DB_USER}:${HAMMRLY_DB_PASSWORD}@{{ $db.url }}"
+              exec hammrly-orchestrator
+          {{- end }}
+          env:
+            - name: HAMMRLY_REDIS_URL
+              value: {{ required "redisUrl is required" .Values.redisUrl | quote }}
+            {{- if eq $dbMode "inline" }}
+            - name: HAMMRLY_DATABASE_URL
+              value: {{ $db.url | quote }}
+            {{- else if eq $dbMode "assembled" }}
+            - name: HAMMRLY_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $db.existingSecret }}
+                  key: {{ $db.secretKeys.username }}
+            - name: HAMMRLY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $db.existingSecret }}
+                  key: {{ $db.secretKeys.password }}
+            {{- end }}
+            - name: HAMMRLY_K8S_SUBMIT_ENABLED
+              value: {{ ternary "true" "false" .Values.k8sSubmitEnabled | quote }}
+            - name: HAMMRLY_K8S_NAMESPACE
+              value: {{ $wlNs | quote }}
+            - name: HAMMRLY_CLUSTER_ID
+              value: {{ .Values.clusterId | quote }}
+            - name: HAMMRLY_K8S_EPHEMERAL_STORAGE_DEFAULT
+              value: {{ (index (.Values.ephemeralStorage | default dict) "default") | default "20" | quote }}
+            - name: HAMMRLY_K8S_EPHEMERAL_STORAGE_MAX
+              value: {{ (index (.Values.ephemeralStorage | default dict) "max") | default "20" | quote }}
+            - name: HAMMRLY_K8S_JOB_RUN_AS_USER
+              value: {{ (index (.Values.jobSecurityContext | default dict) "runAsUser") | default 1000 | quote }}
+            - name: HAMMRLY_K8S_JOB_RUN_AS_GROUP
+              value: {{ (index (.Values.jobSecurityContext | default dict) "runAsGroup") | default 1000 | quote }}
+            - name: HAMMRLY_K8S_WORKSPACE_MOUNT_PATH
+              value: {{ (index (.Values.workspace | default dict) "mountPath") | default "/workspace" | quote }}
+            - name: HAMMRLY_K8S_WORKSPACE_TRANSFER_IMAGE
+              value: {{ (index (.Values.workspace | default dict) "transferImage") | default "python:3.12-alpine" | quote }}
+            - name: HAMMRLY_K8S_WORKSPACE_COMPLETION_FILE
+              value: {{ (index (.Values.workspace | default dict) "completionFile") | default "hammrly-complete.json" | quote }}
+            - name: HAMMRLY_K8S_WORKSPACE_ERROR_FILE
+              value: {{ (index (.Values.workspace | default dict) "errorFile") | default "hammrly-error.json" | quote }}
+            - name: HAMMRLY_K8S_DESKTOP_SHM_DEFAULT
+              value: {{ (index (.Values.desktop | default dict) "shmDefault") | default "1Gi" | quote }}
+            - name: HAMMRLY_JOB_WATCH_ENABLED
+              value: {{ ternary "true" "false" .Values.jobWatchEnabled | quote }}
+            - name: HAMMRLY_JOB_WATCH_NAMESPACE
+              value: {{ $watchNs | quote }}
+            - name: HAMMRLY_JOB_WATCH_LABEL_SELECTOR
+              value: {{ .Values.jobWatchLabelSelector | quote }}
+            - name: HAMMRLY_JOB_DRIFT_RECONCILE_INTERVAL_SEC
+              value: {{ .Values.jobDriftReconcileIntervalSec | quote }}
+            - name: HAMMRLY_POD_WATCH_ENABLED
+              value: {{ ternary "true" "false" .Values.podWatchEnabled | quote }}
+            - name: HAMMRLY_POD_WATCH_NAMESPACE
+              value: {{ .Values.podWatchNamespace | default $watchNs | quote }}
+            - name: HAMMRLY_POD_WATCH_LABEL_SELECTOR
+              value: {{ .Values.podWatchLabelSelector | quote }}
+            {{- $session := .Values.session | default dict }}
+            {{- $kueueCfg := index $session "kueue" | default dict }}
+            - name: HAMMRLY_KUEUE_LOCAL_QUEUE_DEFAULT
+              value: {{ $kueueCfg.localQueueDefault | default "default" | quote }}
+            {{- $kinds := index $session "kinds" | default dict }}
+            {{- range $kind, $cfg := $kinds }}
+
+            {{- if and $cfg (kindIs "map" $cfg) ($cfg.queueName | default "" | trim) }}
+            - name: HAMMRLY_KUEUE_QUEUE_{{ $kind | upper }}
+              value: {{ $cfg.queueName | quote }}
+            {{- end }}
+            {{- $ing := index $cfg "ingress" | default dict }}
+            {{- if and $cfg (kindIs "map" $cfg) (kindIs "map" $ing) ($ing.pathTemplate | default "" | trim) }}
+            - name: HAMMRLY_K8S_INGRESS_PATH_TEMPLATE_{{ $kind | upper }}
+              value: {{ $ing.pathTemplate | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.ingress.host }}
+            - name: HAMMRLY_K8S_INGRESS_HOST
+              value: {{ .Values.ingress.host | quote }}
+            {{- end }}
+            {{- if .Values.ingress.className }}
+            - name: HAMMRLY_K8S_INGRESS_CLASS_NAME
+              value: {{ .Values.ingress.className | quote }}
+            {{- end }}
+            - name: HAMMRLY_K8S_INGRESS_PATH_PREFIX
+              value: {{ .Values.ingress.pathPrefix | quote }}
+            - name: HAMMRLY_PUBLIC_URL_SCHEME
+              value: {{ .Values.publicUrlScheme | quote }}
+            - name: HAMMRLY_K8S_EDGE_BINDING
+              value: {{ .Values.edgeBinding | quote }}
+            {{- $ingressAuth := .Values.ingress.auth | default dict }}
+            - name: HAMMRLY_K8S_INGRESS_AUTH_ENABLED
+              value: {{ ternary "true" "false" $ingressAuth.enabled | quote }}
+            - name: HAMMRLY_K8S_INGRESS_AUTH_ANNOTATIONS
+              value: {{ include "hammrly-orchestrator.sessionAuthAnnotations" . | quote }}
+            - name: HAMMRLY_K8S_INGRESS_AUTH_DISABLE_JUPYTER_TOKEN
+              value: {{ ternary "true" "false" ($ingressAuth.disableJupyterToken | default true) | quote }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "kill -0 1"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

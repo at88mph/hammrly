@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hammrly-portal.fullname" . }}-config
+  labels:
+    {{- include "hammrly-portal.labels" . | nindent 4 }}
+data:
+  config.json: |
+{{- $cfg := .Values.config }}
+{{- $out := dict "queryBaseUrl" $cfg.queryBaseUrl "gatewayBaseUrl" $cfg.gatewayBaseUrl "catalogBaseUrl" $cfg.catalogBaseUrl "defaultSearchTerms" ($cfg.defaultSearchTerms | default list) "imageMap" ($cfg.imageMap | default dict) "oidcProviders" ($cfg.oidcProviders | default list) }}
+{{- if $cfg.devBypass }}
+{{- $_ := set $out "devBypass" $cfg.devBypass }}
+{{- end }}
+{{ $out | toJson | indent 4 }}

@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hammrly.local/schemas/job-campaign/v1.json",
+  "title": "JobCampaignContracts",
+  "description": "Headless campaign submit (HTTP) and campaign expansion queue envelope.",
+  "$defs": {
+    "SchemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "Correlation": {
+      "type": "object",
+      "properties": {
+        "trace_id": { "type": "string" },
+        "span_id": { "type": "string" },
+        "client_request_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "CampaignMetadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "description": { "type": "string", "maxLength": 2000 },
+        "output_uri": { "type": "string", "minLength": 1 },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CampaignItem": {
+      "type": "object",
+      "required": ["item_key", "input_uri"],
+      "properties": {
+        "item_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "input_uri": { "type": "string", "minLength": 1 },
+        "output_uri": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "batch_args": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HeadlessWorkloadTemplate": {
+      "type": "object",
+      "required": ["kind", "name", "image", "resources", "kind_options"],
+      "properties": {
+        "kind": { "const": "headless" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "image": { "type": "string", "minLength": 1 },
+        "input_uri": { "type": "string", "minLength": 1 },
+        "output_uri": { "type": "string", "minLength": 1 },
+        "gpu_count": { "type": "integer", "minimum": 0 },
+        "resources": { "type": "object" },
+        "needs_ingress": { "type": "boolean" },
+        "needs_service": { "type": "boolean" },
+        "priority": { "type": "integer" },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "ttl_seconds_after_finished": { "type": "integer", "minimum": 0 },
+        "kind_options": {
+          "type": "object",
+          "required": ["batch"],
+          "properties": {
+            "batch": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "backoff_limit": { "type": "integer", "minimum": 0 },
+                "parallelism": { "type": "integer", "minimum": 1 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "CampaignSubmitRequest": {
+      "type": "object",
+      "required": ["schema_version", "campaign", "template"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+        "campaign": { "$ref": "#/$defs/CampaignMetadata" },
+        "template": { "$ref": "#/$defs/HeadlessWorkloadTemplate" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/CampaignItem" }
+        },
+        "manifest_uri": { "type": "string", "minLength": 1 },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "item_count": { "type": "integer", "minimum": 1 },
+        "tenant_id": { "type": "string", "minLength": 1 },
+        "project_id": { "type": "string" },
+        "correlation": { "$ref": "#/$defs/Correlation" }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["items"] },
+        { "required": ["manifest_uri"] }
+      ]
+    },
+    "CampaignExpansionEnvelope": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "campaign_id",
+        "tenant_id",
+        "user_id",
+        "requested_at",
+        "campaign",
+        "template"
+      ],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+        "campaign_id": { "type": "string", "format": "uuid" },
+        "tenant_id": { "type": "string", "minLength": 1 },
+        "user_id": { "type": "string", "minLength": 1 },
+        "project_id": { "type": "string" },
+        "requested_at": { "type": "string", "format": "date-time" },
+        "campaign": { "$ref": "#/$defs/CampaignMetadata" },
+        "template": { "$ref": "#/$defs/HeadlessWorkloadTemplate" },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CampaignItem" }
+        },
+        "manifest_uri": { "type": "string", "minLength": 1 },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "item_count": { "type": "integer", "minimum": 0 },
+        "correlation": { "$ref": "#/$defs/Correlation" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/CampaignSubmitRequest" },
+    { "$ref": "#/$defs/CampaignExpansionEnvelope" }
+  ]
+}

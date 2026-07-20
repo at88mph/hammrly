@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hammrly-portal.fullname" . }}
+  labels:
+    {{- include "hammrly-portal.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "hammrly-portal.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hammrly-portal.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: portal
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Helm mounts nginx config; skip the image entrypoint envsubst pass that writes default.conf.
+            - name: NGINX_ENVSUBST_TEMPLATE_DIR
+              value: /tmp/no-nginx-templates
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/nginx/html/config.json
+              subPath: config.json
+              readOnly: true
+            - name: nginx
+              mountPath: /etc/nginx/conf.d/portal.conf
+              subPath: default.conf
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: {{ include "hammrly-portal.probePath" . }}
+              port: http
+          readinessProbe:
+            httpGet:
+              path: {{ include "hammrly-portal.probePath" . }}
+              port: http
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "hammrly-portal.fullname" . }}-config
+        - name: nginx
+          configMap:
+            name: {{ include "hammrly-portal.fullname" . }}-nginx

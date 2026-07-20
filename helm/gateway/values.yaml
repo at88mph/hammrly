@@ -1,0 +1,85 @@
+replicaCount: 1
+nameOverride: ""
+fullnameOverride: ""
+image:
+  repository: registry.gitlab.com/djenkins.cadc/hammrly/gateway
+  tag: "0.1.0-rc.22"
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 8080
+# Mount all HTTP routes under this path (e.g. /hammrly/gateway). Match your ingress
+# PathPrefix without path-rewrite middleware. Probes use this prefix automatically.
+#
+# hammrly-stack: set gateway.httpPathPrefix here, NOT at the stack file root.
+# Must equal the ingress path for this service (gateway vs query each have their own).
+httpPathPrefix: ""
+# Expose HTTP outside the cluster (enable one or both as needed).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # hosts:
+  #   - host: gateway.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  hosts: []
+  tls: []
+# Kubernetes Gateway API (install Gateway CRDs / controller separately).
+httpRoute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  annotations: {}
+  extraLabels: {}
+  # parentRefs:
+  #   - name: eg
+  #     namespace: envoy-gateway-system
+  #     sectionName: http
+  parentRefs: []
+  hostnames: []
+  matches:
+    - path:
+        type: PathPrefix
+        value: /
+  filters: []
+  # If non-empty, replaces the default single Service backend reference.
+  backendRefs: []
+# HAMMRLY_REDIS_URL — required
+redisUrl: ""
+# Optional: HAMMRLY_CONTRACT_SCHEMA_PATH (image ships schema under /app/contracts)
+contractSchemaPath: /app/contracts/job-submission/v1/schema.json
+# Caller workload ephemeral-storage policy, in GB.
+ephemeralStorage:
+  default: 20
+  max: 20
+jwt:
+  devHmacSecret: ""
+  jwksUrl: ""
+  issuer: ""
+  audience: ""
+  requiredScopes: "hammrly:jobs:submit"
+# Optional public Query API origin for POST /v2/session status_url (absolute URL).
+# When unset, status_url is a path only (e.g. /v1/jobs/{job_id}).
+queryPublicBaseUrl: ""
+extraEnv: []
+resources: {}
+podSecurityContext: {}
+securityContext: {}
+# HorizontalPodAutoscaler (autoscaling/v2). When enabled, Deployment replicas
+# are set to minReplicas; override metrics/behavior for your workload.
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

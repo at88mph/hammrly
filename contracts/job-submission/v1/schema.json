@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hammrly.local/schemas/job-submission/v1.json",
+  "title": "JobSubmissionEnvelope",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "submission_id",
+    "job_id",
+    "tenant_id",
+    "user_id",
+    "requested_at",
+    "workload"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Contract version. See contracts/job-submission/v1/README.md for acceptance policy.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "submission_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Idempotency key for queue/redelivery; stable across gateway retries."
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Gateway-generated job identifier (API- and UI-facing); included in platform metadata and Kubernetes labels."
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Tenant isolation; maps to Kueue LocalQueue / labels per platform policy.  Also known as a Community."
+    },
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable end-user identity for audit, metadata, and Kubernetes Job label hammrly.io/user-id. Gateway SHOULD use a canonical id (e.g. platform user id or OIDC subject). Orchestrator MUST normalize to a valid Kubernetes label value (≤63 chars, allowed charset) e.g. by truncation or deterministic hash."
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Optional project scope for quotas or grouping."
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the user request was accepted (RFC 3339)."
+    },
+    "correlation": {
+      "type": "object",
+      "properties": {
+        "trace_id": { "type": "string" },
+        "span_id": { "type": "string" },
+        "client_request_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "workload": {
+      "$ref": "#/$defs/WorkloadSpec"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "WorkloadKind": {
+      "type": "string",
+      "enum": [
+        "desktop",
+        "notebook",
+        "carta",
+        "contributed",
+        "headless"
+      ]
+    },
+    "ResourceMap": {
+      "type": "object",
+      "description": "Kubernetes resource quantities. Each value is applied as both request and limit for Kueue-safe scheduling. Standard keys: cpu, memory, ephemeral_storage. Extended keys (e.g. nvidia.com/gpu) allowed.",
+      "properties": {
+        "cpu": { "type": "string", "minLength": 1 },
+        "memory": { "type": "string", "minLength": 1 },
+        "ephemeral_storage": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container ephemeral-storage quantity in GB. Gateway normalizes to Kubernetes decimal G quantities, defaults to 20GB when omitted, and caps at deployer-configured policy."
+        }
+      },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "SecretKeyRef": {
+      "type": "object",
+      "required": ["secret_name", "key"],
+      "properties": {
+        "secret_name": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "NovncOptions": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "path_prefix": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "JupyterOptions": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "token_ref": { "$ref": "#/$defs/SecretKeyRef" },
+        "auth_mode": {
+          "type": "string",
+          "description": "Platform-defined auth mode when token_ref is not used."
+        }
+      },
+      "additionalProperties": false
+    },
+    "CartaOptions": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "socket_policy": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ContributedKindOptions": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "working_dir": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "BatchKindOptions": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "backoff_limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parallelism": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProbePort": {
+      "description": "Container port for a probe handler, or the literal \"workload\" to use the kind's service port.",
+      "oneOf": [
+        { "type": "integer", "minimum": 1, "maximum": 65535 },
+        { "type": "string", "const": "workload" }
+      ]
+    },
+    "HttpGetProbeAction": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "HTTP path. May include {ingress_path} placeholder resolved by the orchestrator."
+        },
+        "port": { "$ref": "#/$defs/ProbePort" },
+        "scheme": {
+          "type": "string",
+          "enum": ["HTTP", "HTTPS"],
+          "default": "HTTP"
+        },
+        "host": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "TcpSocketProbeAction": {
+      "type": "object",
+      "required": ["port"],
+      "properties": {
+        "port": { "$ref": "#/$defs/ProbePort" },
+        "host": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ExecProbeAction": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContainerProbe": {
+      "type": "object",
+      "properties": {
+        "httpGet": { "$ref": "#/$defs/HttpGetProbeAction" },
+        "tcpSocket": { "$ref": "#/$defs/TcpSocketProbeAction" },
+        "exec": { "$ref": "#/$defs/ExecProbeAction" },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "successThreshold": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["httpGet"] },
+        { "required": ["tcpSocket"] },
+        { "required": ["exec"] }
+      ]
+    },
+    "WorkloadProbes": {
+      "type": "object",
+      "properties": {
+        "readiness": { "$ref": "#/$defs/ContainerProbe" },
+        "liveness": { "$ref": "#/$defs/ContainerProbe" },
+        "startup": { "$ref": "#/$defs/ContainerProbe" }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadSpec": {
+      "type": "object",
+      "required": [
+        "kind",
+        "name",
+        "image",
+        "resources"
+      ],
+      "properties": {
+        "kind": { "$ref": "#/$defs/WorkloadKind" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "description": "Logical workload name; must be sanitizable to RFC 1123 for Kubernetes names."
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OCI image reference (tag or digest)."
+        },
+        "input_uri": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional user-specified URI/URL downloaded by the orchestrator init container into /workspace/inputs before the workload starts."
+        },
+        "output_uri": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional default URI/URL prefix used by the output sidecar when completion JSON output entries omit destination_uri."
+        },
+        "gpu_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of NVIDIA GPUs to allocate. When > 0, orchestrator sets matching device request and limit and schedules only on GPU worker nodes (see platform node labels). When 0 (default), workloads must not run on GPU-only nodes."
+        },
+        "resources": { "$ref": "#/$defs/ResourceMap" },
+        "needs_ingress": {
+          "type": "boolean",
+          "description": "When true, orchestrator creates an Ingress after Service prerequisites."
+        },
+        "needs_service": {
+          "type": "boolean",
+          "description": "When true, orchestrator creates a Service for pod exposure."
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Optional; maps to Kueue / labels per cluster policy."
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": true
+          }
+        },
+        "ttl_seconds_after_finished": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional Job TTL hint (Kubernetes spec.ttlSecondsAfterFinished)."
+        },
+        "kind_options": {
+          "type": "object",
+          "description": "Discriminated by workload.kind; see if/then rules in this schema."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "desktop" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "kind_options": {
+                "type": "object",
+                "properties": {
+                  "novnc": { "$ref": "#/$defs/NovncOptions" },
+                  "probes": { "$ref": "#/$defs/WorkloadProbes" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "notebook" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "kind_options": {
+                "type": "object",
+                "properties": {
+                  "jupyter": { "$ref": "#/$defs/JupyterOptions" },
+                  "probes": { "$ref": "#/$defs/WorkloadProbes" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "carta" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "kind_options": {
+                "type": "object",
+                "properties": {
+                  "carta": { "$ref": "#/$defs/CartaOptions" },
+                  "probes": { "$ref": "#/$defs/WorkloadProbes" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "contributed" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "kind_options": {
+                "type": "object",
+                "properties": {
+                  "contributed": { "$ref": "#/$defs/ContributedKindOptions" },
+                  "probes": { "$ref": "#/$defs/WorkloadProbes" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "headless" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["kind_options"],
+            "properties": {
+              "kind_options": {
+                "type": "object",
+                "required": ["batch"],
+                "properties": {
+                  "batch": { "$ref": "#/$defs/BatchKindOptions" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

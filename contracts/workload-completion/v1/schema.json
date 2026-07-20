@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hammrly.local/schemas/workload-completion/v1.json",
+  "title": "WorkloadCompletionManifest",
+  "description": "Manifest written by a workload container to signal success or failure to the Hammrly output sidecar.",
+  "oneOf": [
+    { "$ref": "#/$defs/SuccessManifest" },
+    { "$ref": "#/$defs/ErrorManifest" }
+  ],
+  "$defs": {
+    "SchemaVersion": {
+      "type": "string",
+      "description": "Workload completion contract version.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "JsonObject": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "OutputObject": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to upload. Relative paths are resolved from HAMMRLY_WORKSPACE, usually /workspace."
+        },
+        "destination_uri": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional exact upload destination. If omitted, the sidecar uses workload.output_uri as a destination prefix."
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "metadata": {
+          "$ref": "#/$defs/JsonObject"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutputEntry": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to upload. Relative paths are resolved from HAMMRLY_WORKSPACE."
+        },
+        { "$ref": "#/$defs/OutputObject" }
+      ]
+    },
+    "CommonFields": {
+      "type": "object",
+      "required": ["schema_version", "status"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+        "status": {
+          "type": "string",
+          "enum": ["complete", "error"]
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC RFC 3339 timestamp when the workload wrote the manifest."
+        },
+        "metadata": {
+          "$ref": "#/$defs/JsonObject"
+        }
+      }
+    },
+    "SuccessManifest": {
+      "allOf": [
+        { "$ref": "#/$defs/CommonFields" },
+        {
+          "type": "object",
+          "required": ["schema_version", "status", "outputs"],
+          "properties": {
+            "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+            "status": { "const": "complete" },
+            "finished_at": { "type": "string", "format": "date-time" },
+            "outputs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/OutputEntry" },
+              "description": "Files the sidecar should upload. The sidecar does not scan /workspace/outputs automatically."
+            },
+            "metadata": { "$ref": "#/$defs/JsonObject" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ErrorManifest": {
+      "allOf": [
+        { "$ref": "#/$defs/CommonFields" },
+        {
+          "type": "object",
+          "required": ["schema_version", "status", "code", "message"],
+          "properties": {
+            "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+            "status": { "const": "error" },
+            "finished_at": { "type": "string", "format": "date-time" },
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "details": { "$ref": "#/$defs/JsonObject" },
+            "metadata": { "$ref": "#/$defs/JsonObject" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

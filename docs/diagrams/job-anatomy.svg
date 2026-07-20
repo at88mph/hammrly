@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 380" role="graphics-document document" aria-roledescription="flowchart">
+<style>
+  text { font-family: "trebuchet ms", verdana, arial, sans-serif; font-size: 14px; fill: #333; }
+  .title { font-size: 15px; font-weight: bold; }
+  .subtitle { font-size: 12px; fill: #555; }
+  .cluster-title { font-size: 15px; font-weight: bold; fill: #333; }
+  .node { fill: #ECECFF; stroke: #9370DB; stroke-width: 1; }
+  .cluster { fill: #ffffde; stroke: #aaaa33; stroke-width: 1; }
+  .storage-top, .storage-body, .storage-bottom { fill: #ECECFF; stroke: #9370DB; stroke-width: 1; }
+  .edge { fill: none; stroke: #333; stroke-width: 2; marker-end: url(#arrow); }
+  .edge-label { font-size: 11px; fill: #333; }
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+  </marker>
+</defs>
+
+<!-- External storage: input -->
+<g transform="translate(20, 70)">
+  <text x="55" y="-12" text-anchor="middle" class="cluster-title">External storage</text>
+  <ellipse class="storage-top" cx="55" cy="10" rx="52" ry="14"/>
+  <rect class="storage-body" x="3" y="10" width="104" height="48"/>
+  <ellipse class="storage-bottom" cx="55" cy="58" rx="52" ry="14"/>
+  <text x="55" y="40" text-anchor="middle">input_uri</text>
+</g>
+
+<!-- External storage: output -->
+<g transform="translate(900, 70)">
+  <ellipse class="storage-top" cx="55" cy="10" rx="52" ry="14"/>
+  <rect class="storage-body" x="3" y="10" width="104" height="48"/>
+  <ellipse class="storage-bottom" cx="55" cy="58" rx="52" ry="14"/>
+  <text x="55" y="40" text-anchor="middle">output_uri</text>
+</g>
+
+<!-- Job / Pod -->
+<rect class="cluster" x="145" y="45" width="730" height="250" rx="4"/>
+<text x="510" y="68" text-anchor="middle" class="cluster-title">Kubernetes Job → Pod</text>
+
+<!-- Three containers -->
+<rect class="node" x="175" y="105" width="165" height="92" rx="4"/>
+<text x="257" y="128" text-anchor="middle" class="title">Input staging</text>
+<text x="257" y="146" text-anchor="middle" class="title">container</text>
+<text x="257" y="166" text-anchor="middle" class="subtitle">input-downloader init</text>
+
+<rect class="node" x="427" y="105" width="165" height="92" rx="4"/>
+<text x="509" y="128" text-anchor="middle" class="title">Processing</text>
+<text x="509" y="146" text-anchor="middle" class="title">container</text>
+<text x="509" y="166" text-anchor="middle" class="subtitle">workload user image</text>
+
+<rect class="node" x="679" y="105" width="165" height="92" rx="4"/>
+<text x="761" y="128" text-anchor="middle" class="title">Output container</text>
+<text x="761" y="146" text-anchor="middle" class="subtitle">upload to external</text>
+<text x="761" y="164" text-anchor="middle" class="subtitle">storage · output-watcher</text>
+
+<!-- Shared workspace (full width of Job subgraph, inset 15px) -->
+<rect class="cluster" x="160" y="215" width="700" height="62" rx="4"/>
+<text x="510" y="238" text-anchor="middle" class="subtitle">Shared workspace (emptyDir /workspace)</text>
+<text x="510" y="258" text-anchor="middle" class="subtitle">inputs/ · outputs/ · hammrly-complete.json</text>
+
+<!-- Arrows -->
+<path class="edge" d="M 127 91 L 175 140"/>
+<text x="140" y="105" class="edge-label">download</text>
+
+<path class="edge" d="M 257 197 L 257 215"/>
+<text x="268" y="210" class="edge-label">stage</text>
+
+<path class="edge" d="M 509 197 L 509 215"/>
+<text x="520" y="210" class="edge-label">read / write</text>
+
+<path class="edge" d="M 761 197 L 761 215"/>
+<text x="772" y="210" class="edge-label">watch / upload</text>
+
+<path class="edge" d="M 844 140 L 900 91"/>
+<text x="855" y="105" class="edge-label">PUT / copy</text>
+
+<text x="520" y="345" text-anchor="middle" class="subtitle">Init container runs first; processing and output containers then run concurrently on the shared workspace.</text>
+</svg>

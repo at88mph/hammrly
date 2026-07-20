@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hammrly-catalog
+description: Hammrly catalog — TAP-backed software discovery API
+type: application
+version: 0.1.0-rc.22
+appVersion: "0.1.0-rc.22"

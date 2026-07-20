@@ -1,0 +1,27 @@
+graph LR
+  subgraph "Clients"
+    U[Client UI]
+  end
+
+  subgraph "Edge"
+    G[Gateway]
+  end
+
+  subgraph "Data plane"
+    R[(Redis Stream)]
+    O[Orchestrator]
+    P[(PostgreSQL)]
+    K[Kubernetes API]
+  end
+
+  subgraph "Read path"
+    Q[Query API]
+  end
+
+  U -- submit session --> G
+  G -- XADD payload --> R
+  R -- XREADGROUP --> O
+  O -- persist submissions --> P
+  O -. optional K8s .-> K
+  Q -- read-only query --> P
+  U -- list jobs --> Q

@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hammrly-gateway.fullname" . }}
+  labels:
+    {{- include "hammrly-gateway.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.hpa.enabled }}
+  replicas: {{ .Values.hpa.minReplicas }}
+  {{- else }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "hammrly-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hammrly-gateway.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: HAMMRLY_HOST
+              value: "0.0.0.0"
+            - name: HAMMRLY_PORT
+              value: {{ .Values.service.port | quote }}
+            - name: HAMMRLY_REDIS_URL
+              value: {{ required "redisUrl is required (HAMMRLY_REDIS_URL)" .Values.redisUrl | quote }}
+            {{- if .Values.httpPathPrefix }}
+            - name: HAMMRLY_HTTP_PATH_PREFIX
+              value: {{ .Values.httpPathPrefix | quote }}
+            {{- end }}
+            {{- if .Values.contractSchemaPath }}
+            - name: HAMMRLY_CONTRACT_SCHEMA_PATH
+              value: {{ .Values.contractSchemaPath | quote }}
+            {{- end }}
+            - name: HAMMRLY_EPHEMERAL_STORAGE_DEFAULT
+              value: {{ (index (.Values.ephemeralStorage | default dict) "default") | default "20" | quote }}
+            - name: HAMMRLY_EPHEMERAL_STORAGE_MAX
+              value: {{ (index (.Values.ephemeralStorage | default dict) "max") | default "20" | quote }}
+            {{- if .Values.jwt.devHmacSecret }}
+            - name: HAMMRLY_JWT_DEV_HMAC_SECRET
+              value: {{ .Values.jwt.devHmacSecret | quote }}
+            {{- end }}
+            {{- if .Values.jwt.jwksUrl }}
+            - name: HAMMRLY_JWT_JWKS_URL
+              value: {{ .Values.jwt.jwksUrl | quote }}
+            {{- end }}
+            {{- if .Values.jwt.issuer }}
+            - name: HAMMRLY_JWT_ISSUER
+              value: {{ .Values.jwt.issuer | quote }}
+            {{- end }}
+            {{- if .Values.jwt.audience }}
+            - name: HAMMRLY_JWT_AUDIENCE
+              value: {{ .Values.jwt.audience | quote }}
+            {{- end }}
+            {{- if .Values.jwt.requiredScopes }}
+            - name: HAMMRLY_JWT_REQUIRED_SCOPES
+              value: {{ .Values.jwt.requiredScopes | quote }}
+            {{- end }}
+            {{- if .Values.queryPublicBaseUrl }}
+            - name: HAMMRLY_QUERY_PUBLIC_BASE_URL
+              value: {{ .Values.queryPublicBaseUrl | quote }}
+            {{- end }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ printf "%s%s" (include "hammrly-gateway.httpPathPrefixNormalized" .) "/healthz" | replace "//" "/" | quote }}
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: {{ printf "%s%s" (include "hammrly-gateway.httpPathPrefixNormalized" .) "/readyz" | replace "//" "/" | quote }}
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

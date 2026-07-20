@@ -1,0 +1,6 @@
+apiVersion: v2
+name: oauth2-proxy
+description: oauth2-proxy for Hammrly interactive session ingress auth (orchestrator sub-chart)
+type: application
+version: 0.1.0
+appVersion: "7.7.1"

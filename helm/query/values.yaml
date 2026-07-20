@@ -1,0 +1,83 @@
+replicaCount: 1
+nameOverride: ""
+fullnameOverride: ""
+image:
+  repository: registry.gitlab.com/djenkins.cadc/hammrly/query
+  tag: "0.1.0-rc.22"
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 8081
+# Mount all HTTP routes under this path (e.g. /hammrly/query). Match your ingress
+# PathPrefix without path-rewrite middleware. Probes use this prefix automatically.
+#
+# hammrly-stack: set query.httpPathPrefix, NOT at the stack file root.
+httpPathPrefix: ""
+# Expose HTTP outside the cluster (enable one or both as needed).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # hosts:
+  #   - host: query.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  hosts: []
+  tls: []
+# Kubernetes Gateway API (install Gateway CRDs / controller separately).
+httpRoute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  annotations: {}
+  extraLabels: {}
+  # parentRefs:
+  #   - name: eg
+  #     namespace: envoy-gateway-system
+  #     sectionName: http
+  parentRefs: []
+  hostnames: []
+  matches:
+    - path:
+        type: PathPrefix
+        value: /
+  filters: []
+  backendRefs: []
+# PostgreSQL is required for the query service (read-only SQLAlchemy access).
+#   • url + existingSecret: url is host:port/dbname (credentials only in the Secret).
+#   • url only (dev): full DSN when it contains "://" (credentials in url).
+database:
+  url: ""
+  existingSecret: ""
+  secretKeys:
+    username: username
+    password: password
+jwt:
+  devHmacSecret: ""
+  jwksUrl: ""
+  issuer: ""
+  audience: ""
+  requiredScopes: "hammrly:jobs:read"
+clusterId: ""
+redisUrl: ""
+extraEnv: []
+resources: {}
+podSecurityContext: {}
+securityContext: {}
+# HorizontalPodAutoscaler (autoscaling/v2). When enabled, Deployment replicas
+# are set to minReplicas; override metrics/behavior for your workload.
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

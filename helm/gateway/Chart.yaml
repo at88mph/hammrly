@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hammrly-gateway
+description: Hammrly gateway — HTTP edge for authenticated job submissions (Redis publish)
+type: application
+version: 0.1.0-rc.22
+appVersion: "0.1.0-rc.22"

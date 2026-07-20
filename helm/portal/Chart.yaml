@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hammrly-portal
+description: Hammrly portal — browser UI for session management
+type: application
+version: 0.1.0-rc.22
+appVersion: "0.1.0-rc.22"

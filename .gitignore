@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.tgz
+*.tgz.prov
+
+# Local env
+.env
+.env.*
+
+# Helm — packaged subcharts are rebuilt via `helm dependency update` in helm/stack/
+helm/stack/charts/*.tgz

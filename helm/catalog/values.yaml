@@ -1,0 +1,97 @@
+replicaCount: 1
+nameOverride: ""
+fullnameOverride: ""
+image:
+  repository: registry.gitlab.com/djenkins.cadc/hammrly/catalog
+  tag: "0.1.0-rc.22"
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 8082
+# Mount all HTTP routes under this path (e.g. /hammrly/catalog). Match your ingress
+# PathPrefix without path-rewrite middleware. Probes use this prefix automatically.
+httpPathPrefix: ""
+tap:
+  syncUrl: ""
+  table: software_discovery
+  responseFormat: json
+  timeoutSeconds: 10
+  cacheTtlSeconds: 300
+  cacheMaxRows: 1000
+  searchColumns:
+    - uri
+    - description
+    - tools_included
+    - status
+    - supported_modes
+  columns:
+    - name: uri
+      column: uri
+    - name: description
+      column: description
+    - name: status
+      column: status
+    - name: tools_included
+      column: tools_included
+    - name: supported_modes
+      column: supported_modes
+    - name: cpu_architecture
+      column: cpu_architecture
+    - name: min_memory
+      column: min_memory
+    - name: recommended_memory
+      column: recommended_memory
+    - name: requires_gpu
+      column: requires_gpu
+search:
+  maxTerms: 8
+  maxTermLength: 64
+list:
+  defaultLimit: 50
+  maxLimit: 200
+# Expose HTTP outside the cluster (enable one or both as needed).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+# Kubernetes Gateway API (install Gateway CRDs / controller separately).
+httpRoute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  annotations: {}
+  extraLabels: {}
+  parentRefs: []
+  hostnames: []
+  matches:
+    - path:
+        type: PathPrefix
+        value: /
+  filters: []
+  backendRefs: []
+jwt:
+  devHmacSecret: ""
+  jwksUrl: ""
+  issuer: ""
+  audience: ""
+  requiredScopes: "hammrly:catalog:read"
+extraEnv: []
+resources: {}
+podSecurityContext: {}
+securityContext: {}
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,89 @@
+# Local / demo stack: Redis, Postgres, gateway, orchestrator, query.
+# Kubernetes submission is disabled here (orchestrator consumes the stream and persists only).
+#
+# Usage (repository root):
+#   docker compose up --build
+#
+# Gateway:  http://localhost:8080  ·  Query: http://localhost:8081  ·  Portal dev: http://localhost:5173
+# Override dev JWT secret: export HAMMRLY_JWT_DEV_HMAC_SECRET='...'  (≥32 chars)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hammrly
+      POSTGRES_PASSWORD: hammrly
+      POSTGRES_DB: hammrly
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hammrly -d hammrly"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # migrate:
+  #   image: ghcr.io/at88mph/hammrly-orchestrator:v0.3.0
+  #   environment:
+  #     HAMMRLY_DATABASE_URL: postgresql+psycopg2://hammrly:hammrly@postgres:5432/hammrly
+  #   command: ["alembic", "upgrade", "head"]
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: "no"
+
+  gateway:
+    image: registry.gitlab.com/djenkins.cadc/hammrly/gateway:0.1.0-rc.16
+    ports:
+      - "8080:8080"
+    environment:
+      HAMMRLY_REDIS_URL: redis://redis:6379/0
+      HAMMRLY_JWT_DEV_HMAC_SECRET: ${HAMMRLY_JWT_DEV_HMAC_SECRET:-dev-hammrly-jwt-secret-min-32b!!}
+      HAMMRLY_CORS_ORIGINS: http://localhost:5173
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  orchestrator:
+    image: registry.gitlab.com/djenkins.cadc/hammrly/orchestrator:0.1.0-rc.16
+    environment:
+      HAMMRLY_REDIS_URL: redis://redis:6379/0
+      HAMMRLY_DATABASE_URL: postgresql+psycopg2://hammrly:hammrly@postgres:5432/hammrly
+      HAMMRLY_K8S_SUBMIT_ENABLED: "false"
+      HAMMRLY_JOB_WATCH_ENABLED: "false"
+      HAMMRLY_JOB_DRIFT_RECONCILE_INTERVAL_SEC: "0"
+      HAMMRLY_CLUSTER_ID: docker-compose
+    depends_on:
+      # migrate:
+      #   condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  query:
+    image: ghcr.io/at88mph/hammrly-query:v0.3.0
+    ports:
+      - "8081:8081"
+    environment:
+      HAMMRLY_DATABASE_URL: postgresql+psycopg2://hammrly:hammrly@postgres:5432/hammrly
+      HAMMRLY_REDIS_URL: redis://redis:6379/0
+      HAMMRLY_JWT_DEV_HMAC_SECRET: ${HAMMRLY_JWT_DEV_HMAC_SECRET:-dev-hammrly-jwt-secret-min-32b!!}
+      HAMMRLY_CLUSTER_ID: docker-compose
+      HAMMRLY_CORS_ORIGINS: http://localhost:5173
+    depends_on:
+      # migrate:
+      #   condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

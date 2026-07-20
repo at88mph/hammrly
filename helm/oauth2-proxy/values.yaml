@@ -1,0 +1,38 @@
+enabled: true
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: quay.io/oauth2-proxy/oauth2-proxy
+  tag: v7.7.1
+  pullPolicy: IfNotPresent
+
+# Session ingress host (must match orchestrator ingress.host).
+ingressHost: ""
+ingressClassName: ""
+# Traefik profile only — render ForwardAuth + errors Middleware CRDs.
+authProfile: traefik
+
+jwt:
+  issuer: ""
+  audience: ""
+
+redirectUrl: ""
+cookieDomain: ""
+clientId: ""
+existingSecret: ""
+secretKeys:
+  clientSecret: client-secret
+  cookieSecret: cookie-secret
+
+skipJwtBearerTokens: false
+emailDomains:
+  - "*"
+
+service:
+  port: 4180
+
+podSecurityContext: {}
+securityContext: {}
+
+resources: {}

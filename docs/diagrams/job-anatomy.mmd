@@ -1,0 +1,30 @@
+flowchart TB
+  subgraph External["External storage"]
+    direction LR
+    IN[(input_uri)]
+    OUT[(output_uri)]
+  end
+
+  subgraph Job["Kubernetes Job"]
+    subgraph Pod["Pod"]
+      direction TB
+      subgraph Containers[" "]
+        direction LR
+        INIT["Input staging container<br/>input-downloader init"]
+        WORK["Processing container<br/>workload user image"]
+        SIDE["Output container<br/>output-watcher sidecar<br/>upload to external storage"]
+      end
+      subgraph Workspace["Shared workspace emptyDir /workspace"]
+        direction LR
+        INPUTS["inputs/"]
+        OUTPUTS["outputs/"]
+        COMPLETE["hammrly-complete.json"]
+      end
+    end
+  end
+
+  IN -- download --> INIT
+  INIT -- stage --> Workspace
+  WORK -- read / write --> Workspace
+  Workspace -- watch / upload --> SIDE
+  SIDE -- PUT or copy --> OUT

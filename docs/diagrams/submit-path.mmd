@@ -1,0 +1,24 @@
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant GW as Gateway
+  participant RD as Redis Stream
+  participant OR as Orchestrator
+  participant DB as PostgreSQL
+  participant K8s as Kubernetes
+
+  C->>GW: POST v2 session with Bearer JWT
+  GW->>GW: JWT authZ and schema validation
+  GW->>RD: XADD job submission envelope
+  GW-->>C: 201 with job and submission ids
+
+  OR->>RD: XREADGROUP orchestrator group
+  RD-->>OR: stream message and payload
+  OR->>DB: record received and events
+
+  alt K8s submit enabled
+    OR->>K8s: create suspended Job
+    OR->>DB: mark k8s created or failure
+  else Compose stream-only mode
+    OR->>OR: skip Kubernetes calls
+  end

@@ -1,0 +1,404 @@
+# GitLab CI for Hammrly container images and Helm chart releases.
+#
+# Container validation on merge requests and pushes to main/master:
+#   - Service images (gateway, orchestrator, query, catalog, portal): build only (cacheonly).
+#   - Desktop images (base → astronomy → gpu): layered multi-arch build; pipeline-scoped
+#     registry tags are pushed so derived layers can resolve build-args.
+#
+# Release pipeline (build/push images to GitLab Container Registry, bump Helm,
+# publish charts to GitLab Package Registry):
+#   - push a Git tag (e.g. v1.2.0), or
+#   - run a web pipeline manually and set RELEASE_TAG (e.g. v1.2.0)
+#
+# Images are published as:
+#   $CI_REGISTRY_IMAGE/{gateway,orchestrator,query,catalog,portal}:{tag,latest}
+#   $CI_REGISTRY_IMAGE/{desktop-base,desktop-astronomy,desktop-astronomy-gpu}:{tag,latest}
+#
+# Helm charts are published to:
+#   $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/helm/$HELM_CHANNEL/charts
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(main|master)$/
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web" && $RELEASE_TAG
+
+default:
+  interruptible: true
+
+stages:
+  - build
+  - release-prepare
+  - release
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_DRIVER: overlay2
+  DOCKER_BUILDKIT: "1"
+  HELM_CHANNEL: stable
+
+.docker:
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+  before_script:
+    - until docker info; do sleep 1; done
+    - docker run --rm --privileged tonistiigi/binfmt --install all
+    - docker context inspect hammrly-context >/dev/null 2>&1 || docker context create hammrly-context
+    - |
+      if ! docker buildx inspect hammrly-builder >/dev/null 2>&1; then
+        docker buildx create --name hammrly-builder --driver docker-container --use hammrly-context
+      else
+        docker buildx use hammrly-builder
+      fi
+    - docker buildx inspect --bootstrap
+
+.docker-login:
+  extends: .docker
+  before_script:
+    - !reference [.docker, before_script]
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+
+.release-docker-before:
+  before_script:
+    - apk add --no-cache git
+    - |
+      if [ -n "${RELEASE_TAG:-}" ] && [ -z "${CI_COMMIT_TAG:-}" ]; then
+        git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+        git checkout "${RELEASE_TAG}"
+      fi
+    - !reference [.docker, before_script]
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+
+.rules:container-validation:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(main|master)$/ && $CI_PIPELINE_SOURCE == "push"
+
+.rules:release:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web" && $RELEASE_TAG
+
+build:container:
+  extends:
+    - .docker
+    - .rules:container-validation
+  stage: build
+  resource_group: container-images-$CI_COMMIT_REF_SLUG
+  parallel:
+    matrix:
+      - SERVICE: gateway
+        DOCKERFILE: services/gateway/Dockerfile
+      - SERVICE: orchestrator
+        DOCKERFILE: services/orchestrator/Dockerfile
+      - SERVICE: query
+        DOCKERFILE: services/query/Dockerfile
+      - SERVICE: catalog
+        DOCKERFILE: services/catalog/Dockerfile
+      - SERVICE: portal
+        DOCKERFILE: services/portal/Dockerfile
+  cache:
+    key: buildx-$CI_COMMIT_REF_SLUG-$SERVICE
+    paths:
+      - .buildx-cache/
+  script:
+    - |
+      set -euo pipefail
+      image="${CI_REGISTRY_IMAGE}-${SERVICE}"
+      if [ "${CI_PIPELINE_SOURCE}" = "merge_request_event" ]; then
+        tag="${image}:pr-${CI_COMMIT_SHORT_SHA}"
+      else
+        tag="${image}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
+      fi
+      docker buildx build \
+        --file "${DOCKERFILE}" \
+        --platform linux/amd64,linux/arm64 \
+        --tag "${tag}" \
+        --output type=cacheonly \
+        --cache-from "type=local,src=.buildx-cache" \
+        --cache-to "type=local,dest=.buildx-cache,mode=max" \
+        .
+
+build:desktop:
+  extends:
+    - .docker-login
+    - .rules:container-validation
+  stage: build
+  resource_group: container-images-$CI_COMMIT_REF_SLUG-desktop
+  cache:
+    key: buildx-$CI_COMMIT_REF_SLUG-desktop
+    paths:
+      - .buildx-cache-desktop/
+  script:
+    - |
+      set -euo pipefail
+      pipe_tag="pipeline-${CI_PIPELINE_ID}"
+      base="${CI_REGISTRY_IMAGE}/desktop-base"
+      astro="${CI_REGISTRY_IMAGE}/desktop-astronomy"
+
+      docker buildx build \
+        --file images/desktop/base/Dockerfile \
+        --tag "${base}:${pipe_tag}" \
+        --push \
+        --cache-from "type=local,src=.buildx-cache-desktop" \
+        --cache-to "type=local,dest=.buildx-cache-desktop,mode=max" \
+        .
+
+      docker buildx build \
+        --file images/desktop/astronomy/Dockerfile \
+        --build-arg "BASE_IMAGE=${base}:${pipe_tag}" \
+        --tag "${astro}:${pipe_tag}" \
+        --push \
+        --cache-from "type=local,src=.buildx-cache-desktop" \
+        --cache-to "type=local,dest=.buildx-cache-desktop,mode=max" \
+        .
+
+      docker buildx build \
+        --file images/desktop/gpu/Dockerfile \
+        --build-arg "ASTRONOMY_IMAGE=${astro}:${pipe_tag}" \
+        --output type=cacheonly \
+        --cache-from "type=local,src=.buildx-cache-desktop" \
+        --cache-to "type=local,dest=.buildx-cache-desktop,mode=max" \
+        .
+
+release:resolve-tag:
+  stage: release-prepare
+  extends: .rules:release
+  interruptible: false
+  resource_group: release-${CI_COMMIT_TAG:-$RELEASE_TAG}
+  image: alpine:3.20
+  script:
+    - |
+      set -euo pipefail
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        tag="${CI_COMMIT_TAG}"
+      elif [ -n "${RELEASE_TAG:-}" ]; then
+        tag="${RELEASE_TAG}"
+      else
+        echo "Release tag is empty" >&2
+        exit 1
+      fi
+      chart_version="${tag#v}"
+      echo "TAG=${tag}" >> release.env
+      echo "CHART_VERSION=${chart_version}" >> release.env
+  artifacts:
+    reports:
+      dotenv: release.env
+
+release:build-push:
+  extends:
+    - .docker
+    - .rules:release
+  stage: release
+  needs:
+    - job: release:resolve-tag
+      artifacts: true
+  interruptible: false
+  resource_group: release-${CI_COMMIT_TAG:-$RELEASE_TAG}
+  parallel:
+    matrix:
+      - SERVICE: gateway
+        DOCKERFILE: services/gateway/Dockerfile
+      - SERVICE: orchestrator
+        DOCKERFILE: services/orchestrator/Dockerfile
+      - SERVICE: query
+        DOCKERFILE: services/query/Dockerfile
+      - SERVICE: catalog
+        DOCKERFILE: services/catalog/Dockerfile
+      - SERVICE: portal
+        DOCKERFILE: services/portal/Dockerfile
+  before_script:
+    - !reference [.release-docker-before, before_script]
+  cache:
+    key: buildx-release-$SERVICE
+    paths:
+      - .buildx-cache/
+  script:
+    - |
+      set -euo pipefail
+      image="${CI_REGISTRY_IMAGE}/${SERVICE}"
+      docker buildx build \
+        --file "${DOCKERFILE}" \
+        --platform linux/amd64,linux/arm64 \
+        --tag "${image}:${TAG}" \
+        --tag "${image}:latest" \
+        --push \
+        --cache-from "type=local,src=.buildx-cache" \
+        --cache-to "type=local,dest=.buildx-cache,mode=max" \
+        --cache-from "type=registry,ref=${image}:buildcache" \
+        --cache-to "type=registry,ref=${image}:buildcache,mode=max" \
+        .
+
+release:build-push-desktop-base:
+  extends:
+    - .docker
+    - .rules:release
+  stage: release
+  needs:
+    - job: release:resolve-tag
+      artifacts: true
+  interruptible: false
+  resource_group: release-${CI_COMMIT_TAG:-$RELEASE_TAG}-desktop-base
+  before_script:
+    - !reference [.release-docker-before, before_script]
+  cache:
+    key: buildx-release-desktop-base
+    paths:
+      - .buildx-cache-desktop-base/
+  script:
+    - |
+      set -euo pipefail
+      image="${CI_REGISTRY_IMAGE}/desktop-base"
+      docker buildx build \
+        --file images/desktop/base/Dockerfile \
+        --tag "${image}:${TAG}" \
+        --tag "${image}:latest" \
+        --push \
+        --cache-from "type=local,src=.buildx-cache-desktop-base" \
+        --cache-to "type=local,dest=.buildx-cache-desktop-base,mode=max" \
+        --cache-from "type=registry,ref=${image}:buildcache" \
+        --cache-to "type=registry,ref=${image}:buildcache,mode=max" \
+        .
+
+release:build-push-desktop-astronomy:
+  extends:
+    - .docker
+    - .rules:release
+  stage: release
+  needs:
+    - job: release:resolve-tag
+      artifacts: true
+    - job: release:build-push-desktop-base
+  interruptible: false
+  resource_group: release-${CI_COMMIT_TAG:-$RELEASE_TAG}-desktop-astronomy
+  before_script:
+    - !reference [.release-docker-before, before_script]
+  cache:
+    key: buildx-release-desktop-astronomy
+    paths:
+      - .buildx-cache-desktop-astronomy/
+  script:
+    - |
+      set -euo pipefail
+      base="${CI_REGISTRY_IMAGE}/desktop-base"
+      image="${CI_REGISTRY_IMAGE}/desktop-astronomy"
+      docker buildx build \
+        --file images/desktop/astronomy/Dockerfile \
+        --build-arg "BASE_IMAGE=${base}:${TAG}" \
+        --tag "${image}:${TAG}" \
+        --tag "${image}:latest" \
+        --push \
+        --cache-from "type=local,src=.buildx-cache-desktop-astronomy" \
+        --cache-to "type=local,dest=.buildx-cache-desktop-astronomy,mode=max" \
+        --cache-from "type=registry,ref=${image}:buildcache" \
+        --cache-to "type=registry,ref=${image}:buildcache,mode=max" \
+        .
+
+release:build-push-desktop-gpu:
+  # Disable this job for now until we have a GPU-enabled worker node.
+  rules:
+    - when: never
+  extends:
+    - .docker
+    - .rules:release
+  stage: release
+  needs:
+    - job: release:resolve-tag
+      artifacts: true
+    - job: release:build-push-desktop-astronomy
+  interruptible: false
+  resource_group: release-${CI_COMMIT_TAG:-$RELEASE_TAG}-desktop-gpu
+  before_script:
+    - !reference [.release-docker-before, before_script]
+  cache:
+    key: buildx-release-desktop-gpu
+    paths:
+      - .buildx-cache-desktop-gpu/
+  script:
+    - |
+      set -euo pipefail
+      astro="${CI_REGISTRY_IMAGE}/desktop-astronomy"
+      image="${CI_REGISTRY_IMAGE}/desktop-astronomy-gpu"
+      docker buildx build \
+        --file images/desktop/gpu/Dockerfile \
+        --build-arg "ASTRONOMY_IMAGE=${astro}:${TAG}" \
+        --tag "${image}:${TAG}" \
+        --tag "${image}:latest" \
+        --push \
+        --cache-from "type=local,src=.buildx-cache-desktop-gpu" \
+        --cache-to "type=local,dest=.buildx-cache-desktop-gpu,mode=max" \
+        --cache-from "type=registry,ref=${image}:buildcache" \
+        --cache-to "type=registry,ref=${image}:buildcache,mode=max" \
+        .
+
+release:helm-publish:
+  extends: .rules:release
+  stage: release
+  needs:
+    - job: release:resolve-tag
+      artifacts: true
+    - job: release:build-push
+  interruptible: false
+  resource_group: release-${CI_COMMIT_TAG:-$RELEASE_TAG}
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache curl git
+    - curl -fsSL https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz | tar -xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+    - curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64"
+    - chmod +x /usr/local/bin/yq
+  script:
+    - |
+      set -euo pipefail
+      export TAG CHART_VERSION
+      export GW="${CI_REGISTRY_IMAGE}/gateway"
+      export ORCH="${CI_REGISTRY_IMAGE}/orchestrator"
+      export QRY="${CI_REGISTRY_IMAGE}/query"
+      export CAT="${CI_REGISTRY_IMAGE}/catalog"
+      export PRT="${CI_REGISTRY_IMAGE}/portal"
+
+      git fetch origin "${CI_DEFAULT_BRANCH}"
+      git checkout "${CI_DEFAULT_BRANCH}"
+
+      for chart in gateway orchestrator query catalog portal stack; do
+        yq -i ".version = strenv(CHART_VERSION) | .appVersion = strenv(TAG)" "helm/${chart}/Chart.yaml"
+      done
+
+      yq -i '.image.repository = strenv(GW) | .image.tag = strenv(TAG)' helm/gateway/values.yaml
+      yq -i '.image.repository = strenv(ORCH) | .image.tag = strenv(TAG)' helm/orchestrator/values.yaml
+      yq -i '.image.repository = strenv(QRY) | .image.tag = strenv(TAG)' helm/query/values.yaml
+      yq -i '.image.repository = strenv(CAT) | .image.tag = strenv(TAG)' helm/catalog/values.yaml
+      yq -i '.image.repository = strenv(PRT) | .image.tag = strenv(TAG)' helm/portal/values.yaml
+      yq -i ".gateway.image.repository = strenv(GW) | .gateway.image.tag = strenv(TAG) | .orchestrator.image.repository = strenv(ORCH) | .orchestrator.image.tag = strenv(TAG) | .query.image.repository = strenv(QRY) | .query.image.tag = strenv(TAG) | .catalog.image.repository = strenv(CAT) | .catalog.image.tag = strenv(TAG) | .portal.image.repository = strenv(PRT) | .portal.image.tag = strenv(TAG)" helm/stack/values.yaml
+
+      yq -i ".dependencies[] |= .version = strenv(CHART_VERSION)" helm/stack/Chart.yaml
+      helm dependency update helm/stack
+
+      if ! git diff --quiet; then
+        git config user.name "GitLab CI"
+        git config user.email "gitlab-ci@${CI_SERVER_HOST}"
+        git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+        git add helm/
+        git commit -m "chore(helm): release ${TAG} images and chart versions"
+        git push origin "HEAD:${CI_DEFAULT_BRANCH}"
+      else
+        echo "No Helm file changes to commit."
+      fi
+
+      mkdir -p dist/charts
+      for chart in gateway orchestrator query catalog portal; do
+        helm package --dependency-update "helm/${chart}" -d dist/charts
+      done
+      helm package --dependency-update helm/stack -d dist/charts
+      ls -la dist/charts/
+
+      upload_url="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/api/${HELM_CHANNEL}/charts"
+      for pkg in dist/charts/*.tgz; do
+        echo "Uploading ${pkg} to GitLab Package Registry (${upload_url})"
+        curl --fail-with-body -sS \
+          --user "gitlab-ci-token:${CI_JOB_TOKEN}" \
+          --form "chart=@${pkg}" \
+          "${upload_url}"
+      done

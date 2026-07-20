@@ -1,0 +1,11 @@
+apiVersion: v2
+name: hammrly-orchestrator
+description: Hammrly orchestrator — Redis stream consumer; optional Kubernetes submitter + Postgres persistence
+type: application
+version: 0.1.0-rc.22
+appVersion: "0.1.0-rc.22"
+dependencies:
+  - name: oauth2-proxy
+    version: 0.1.0
+    repository: file://../oauth2-proxy
+    condition: oauth2-proxy.enabled

@@ -1,0 +1,128 @@
+replicaCount: 1
+nameOverride: ""
+fullnameOverride: ""
+image:
+  repository: registry.gitlab.com/djenkins.cadc/hammrly/orchestrator
+  tag: "0.1.0-rc.22"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+rbac:
+  create: true
+# Namespace where Jobs / Services / Ingress are created. Defaults to chart release namespace.
+k8sWorkloadNamespace: ""
+# HAMMRLY_REDIS_URL — required
+redisUrl: ""
+# PostgreSQL is required for the orchestrator process.
+#   • url + existingSecret: url is host:port/dbname (credentials only in the Secret).
+#   • url only (dev): full DSN when it contains "://" (credentials in url).
+database:
+  url: ""
+  existingSecret: ""
+  secretKeys:
+    username: username
+    password: password
+k8sSubmitEnabled: false
+# Caller workload ephemeral-storage policy for created Jobs, in GB.
+ephemeralStorage:
+  default: 20
+  max: 20
+# Workload Job security context. User containers are always non-root and cannot
+# escalate privileges; these values select the UID/GID used for execution.
+jobSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+# Workspace helper containers share an emptyDir with each created workload Job.
+workspace:
+  mountPath: /workspace
+  transferImage: python:3.12-alpine
+  completionFile: hammrly-complete.json
+  errorFile: hammrly-error.json
+# Desktop GUI stability: in-memory emptyDir mounted at /dev/shm (deployer-only, not in submit JSON).
+desktop:
+  shmDefault: "1Gi"
+# Session / workload.kind routing and Kueue binding:
+#   • session.kueue.localQueueDefault → HAMMRLY_KUEUE_LOCAL_QUEUE_DEFAULT (when a kind has no queueName).
+#   • session.kinds.<kind> (keys must match JSON workload.kind):
+#       queueName  → HAMMRLY_KUEUE_QUEUE_<KIND>
+#       ingress.pathTemplate → HAMMRLY_K8S_INGRESS_PATH_TEMPLATE_<KIND>
+session:
+  kueue:
+    localQueueDefault: "default"
+  kinds:
+    desktop:
+      ingress:
+        pathTemplate: "/hammrly/sessions/desktop/{submission_id}/"
+    notebook:
+      ingress:
+        pathTemplate: "/hammrly/sessions/notebook/{submission_id}/"
+clusterId: "default"
+jobWatchEnabled: false
+jobWatchNamespace: ""
+podWatchEnabled: false
+podWatchNamespace: ""
+podWatchLabelSelector: hammrly.io/managed-by=orchestrator
+jobDriftReconcileIntervalSec: 300
+jobWatchLabelSelector: hammrly.io/managed-by=orchestrator
+# Shared Ingress settings (HAMMRLY_K8S_INGRESS_HOST, class, path prefix). Per-kind path templates live under session.<kind>.ingress.
+ingress:
+  host: ""
+  className: ""
+  pathPrefix: /hammrly
+  auth:
+    enabled: false
+    profile: traefik
+    disableJupyterToken: true
+    traefik:
+      middlewares: ""
+    nginx:
+      authUrl: ""
+      authSignin: ""
+    annotations: {}
+    jwt:
+      issuer: ""
+      audience: ""
+      jwksUrl: ""
+publicUrlScheme: https
+# Conditional sub-chart for session ingress edge auth (see helm/oauth2-proxy).
+oauth2-proxy:
+  enabled: false
+  ingressHost: ""
+  ingressClassName: ""
+  authProfile: traefik
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: v7.7.1
+  jwt:
+    issuer: ""
+    audience: ""
+  redirectUrl: ""
+  cookieDomain: ""
+  clientId: ""
+  existingSecret: ""
+  skipJwtBearerTokens: false
+# standard_ingress | none (GitOps: no in-cluster Ingress; access_url still computed if host is set)
+edgeBinding: standard_ingress
+extraEnv: []
+resources: {}
+podSecurityContext: {}
+securityContext: {}
+# HorizontalPodAutoscaler (autoscaling/v2). When enabled, Deployment replicas
+# are set to minReplicas; override metrics/behavior for your workload.
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
