@@ -19,7 +19,7 @@ gateway:
     requiredScopes: "hammrly:jobs:submit"
   image:
     repository: registry.gitlab.com/djenkins.cadc/hammrly/gateway
-    tag: 0.1.0-rc.22
+    tag: 0.2.0
 orchestrator:
   redisUrl: "redis://redis:6379/0"
   ephemeralStorage:
@@ -64,7 +64,7 @@ orchestrator:
   clusterId: "default"
   image:
     repository: registry.gitlab.com/djenkins.cadc/hammrly/orchestrator
-    tag: 0.1.0-rc.22
+    tag: 0.2.0
 query:
   redisUrl: "redis://redis:6379/0"
   database:
@@ -82,7 +82,7 @@ query:
   clusterId: "default"
   image:
     repository: registry.gitlab.com/djenkins.cadc/hammrly/query
-    tag: 0.1.0-rc.22
+    tag: 0.2.0
 catalog:
   tap:
     syncUrl: "https://example.tap.host/tap/sync"
@@ -94,7 +94,7 @@ catalog:
     requiredScopes: "hammrly:catalog:read"
   image:
     repository: registry.gitlab.com/djenkins.cadc/hammrly/catalog
-    tag: 0.1.0-rc.22
+    tag: 0.2.0
 portal:
   config:
     queryBaseUrl: "https://sessions.example.com/hammrly/query"
@@ -106,4 +106,4 @@ portal:
     oidcProviders: []
   image:
     repository: registry.gitlab.com/djenkins.cadc/hammrly/portal
-    tag: 0.1.0-rc.22
+    tag: 0.2.0

@@ -5,7 +5,7 @@ podSecurityContext: {}
 securityContext: {}
 image:
   repository: registry.gitlab.com/djenkins.cadc/hammrly/portal
-  tag: "0.1.0-rc.22"
+  tag: "0.2.0"
   pullPolicy: IfNotPresent
 service:
   type: ClusterIP
