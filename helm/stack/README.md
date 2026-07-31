@@ -98,7 +98,32 @@ cd helm/stack
 helm dependency update
 ```
 
-## Install
+## Install from GHCR (OCI)
+
+Release builds publish charts to GitHub Container Registry as OCI artifacts:
+
+`oci://ghcr.io/<owner>/<repo>/charts`
+
+```bash
+# Public packages: no login. Private: helm registry login ghcr.io -u USER --password-stdin
+helm install hammrly oci://ghcr.io/at88mph/hammrly/charts/hammrly-stack \
+  --version 0.2.0 \
+  -n hammrly --create-namespace \
+  -f values.yaml \
+  --set gateway.redisUrl=redis://your-redis:6379/0 \
+  --set orchestrator.redisUrl=redis://your-redis:6379/0 \
+  --set orchestrator.database.url='postgresql+psycopg2://user:pass@postgres:5432/hammrly' \
+  --set query.redisUrl='redis://your-redis:6379/0' \
+  --set query.database.url='postgresql+psycopg2://user:pass@postgres:5432/hammrly' \
+  --set catalog.tap.syncUrl='https://example.tap.host/tap/sync' \
+  --set gateway.jwt.devHmacSecret='use-secrets-in-prod' \
+  --set query.jwt.devHmacSecret='use-secrets-in-prod' \
+  --set catalog.jwt.devHmacSecret='use-secrets-in-prod'
+```
+
+Individual charts: `hammrly-gateway`, `hammrly-orchestrator`, `hammrly-query`, `hammrly-catalog`, `hammrly-portal`.
+
+## Install from source
 
 From **`helm/stack`** (demo: full DSN in `database.url` for orchestrator — must contain `://`):
 

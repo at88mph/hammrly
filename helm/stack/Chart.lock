@@ -14,5 +14,5 @@ dependencies:
 - name: hammrly-portal
   repository: file://../portal
   version: 0.2.0
-digest: sha256:d98bdfe632b9a2d57c09876d5cf07ffc03d2da55e4879a7ad4277025614fa0e5
-generated: "2026-07-06T14:29:32.883279272Z"
+digest: sha256:9488cd32c426ee9d046e167ecbed12bde9083f2bd9a972894b3ef7bee463c56f
+generated: "2026-07-31T12:59:35.672969-07:00"

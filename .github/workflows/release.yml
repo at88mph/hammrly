@@ -8,8 +8,11 @@
 #   ghcr.io/<owner>/<repo>/{gateway,orchestrator,query,catalog,portal}:{tag,latest}
 #   ghcr.io/<owner>/<repo>/{desktop-base,desktop-astronomy}:{tag,latest}
 #
-# Helm charts are published as OCI to:
-#   oci://ghcr.io/<owner>/<repo>/charts
+# Helm charts (gateway, orchestrator, query, catalog, portal, stack) are
+# packaged and pushed as OCI artifacts to GitHub Container Registry:
+#   oci://ghcr.io/<owner>/<repo>/charts/<chart-name>
+# Example:
+#   helm pull oci://ghcr.io/at88mph/hammrly/charts/hammrly-stack --version 1.2.0
 
 name: Release
 
@@ -42,6 +45,7 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       chart_version: ${{ steps.resolve.outputs.chart_version }}
+      image_prefix: ${{ steps.resolve.outputs.image_prefix }}
     steps:
       - name: Resolve tag
         id: resolve
@@ -57,9 +61,12 @@ jobs:
             exit 1
           fi
           chart_version="${tag#v}"
+          # GHCR package names must be lowercase.
+          image_prefix="$(echo '${{ env.IMAGE_PREFIX }}' | tr '[:upper:]' '[:lower:]')"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "chart_version=${chart_version}" >> "$GITHUB_OUTPUT"
-          echo "Resolved TAG=${tag} CHART_VERSION=${chart_version}"
+          echo "image_prefix=${image_prefix}" >> "$GITHUB_OUTPUT"
+          echo "Resolved TAG=${tag} CHART_VERSION=${chart_version} IMAGE_PREFIX=${image_prefix}"
 
   build-push-services:
     name: Push ${{ matrix.service }}
@@ -106,14 +113,14 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ needs.resolve-tag.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+            ${{ needs.resolve-tag.outputs.image_prefix }}/${{ matrix.service }}:${{ needs.resolve-tag.outputs.tag }}
+            ${{ needs.resolve-tag.outputs.image_prefix }}/${{ matrix.service }}:latest
           cache-from: |
             type=gha,scope=release-${{ matrix.service }}
-            type=registry,ref=${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:buildcache
+            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/${{ matrix.service }}:buildcache
           cache-to: |
             type=gha,mode=max,scope=release-${{ matrix.service }}
-            type=registry,ref=${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:buildcache,mode=max
+            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/${{ matrix.service }}:buildcache,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -149,14 +156,14 @@ jobs:
           file: images/desktop/base/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}/desktop-base:latest
+            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
+            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:latest
           cache-from: |
             type=gha,scope=release-desktop-base
-            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-base:buildcache
+            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:buildcache
           cache-to: |
             type=gha,mode=max,scope=release-desktop-base
-            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-base:buildcache,mode=max
+            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:buildcache,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -192,16 +199,16 @@ jobs:
           file: images/desktop/astronomy/Dockerfile
           push: true
           build-args: |
-            BASE_IMAGE=${{ env.IMAGE_PREFIX }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
+            BASE_IMAGE=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/desktop-astronomy:${{ needs.resolve-tag.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}/desktop-astronomy:latest
+            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:${{ needs.resolve-tag.outputs.tag }}
+            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:latest
           cache-from: |
             type=gha,scope=release-desktop-astronomy
-            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-astronomy:buildcache
+            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:buildcache
           cache-to: |
             type=gha,mode=max,scope=release-desktop-astronomy
-            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-astronomy:buildcache,mode=max
+            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:buildcache,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -244,11 +251,11 @@ jobs:
         env:
           TAG: ${{ needs.resolve-tag.outputs.tag }}
           CHART_VERSION: ${{ needs.resolve-tag.outputs.chart_version }}
-          GW: ${{ env.IMAGE_PREFIX }}/gateway
-          ORCH: ${{ env.IMAGE_PREFIX }}/orchestrator
-          QRY: ${{ env.IMAGE_PREFIX }}/query
-          CAT: ${{ env.IMAGE_PREFIX }}/catalog
-          PRT: ${{ env.IMAGE_PREFIX }}/portal
+          GW: ${{ needs.resolve-tag.outputs.image_prefix }}/gateway
+          ORCH: ${{ needs.resolve-tag.outputs.image_prefix }}/orchestrator
+          QRY: ${{ needs.resolve-tag.outputs.image_prefix }}/query
+          CAT: ${{ needs.resolve-tag.outputs.image_prefix }}/catalog
+          PRT: ${{ needs.resolve-tag.outputs.image_prefix }}/portal
         run: |
           set -euo pipefail
           for chart in gateway orchestrator query catalog portal stack; do
@@ -264,21 +271,6 @@ jobs:
 
           yq -i ".dependencies[] |= .version = strenv(CHART_VERSION)" helm/stack/Chart.yaml
           helm dependency update helm/stack
-
-      - name: Commit Helm release bump
-        env:
-          TAG: ${{ needs.resolve-tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
-            echo "No Helm file changes to commit."
-          else
-            git add helm/
-            git commit -m "chore(helm): release ${TAG} images and chart versions"
-            git push origin "HEAD:${{ github.event.repository.default_branch }}"
-          fi
 
       - name: Package charts
         run: |
@@ -296,14 +288,44 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
             -u "${{ github.actor }}" --password-stdin
 
-      - name: Push charts to GHCR
+      - name: Push charts to GHCR as OCI
+        env:
+          CHART_VERSION: ${{ needs.resolve-tag.outputs.chart_version }}
+          IMAGE_PREFIX_LC: ${{ needs.resolve-tag.outputs.image_prefix }}
         run: |
           set -euo pipefail
-          chart_oci="oci://${{ env.IMAGE_PREFIX }}/charts"
+          chart_oci="oci://${IMAGE_PREFIX_LC}/charts"
+          {
+            echo "## Helm OCI packages"
+            echo ""
+            echo "Registry: \`${chart_oci}\`"
+            echo ""
+            echo "| Chart | Pull |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
           for pkg in dist/charts/*.tgz; do
             echo "Pushing ${pkg} to ${chart_oci}"
             helm push "${pkg}" "${chart_oci}"
+            base="$(basename "${pkg}" .tgz)"
+            # hammrly-stack-1.2.0 -> hammrly-stack
+            name="${base%-${CHART_VERSION}}"
+            echo "| \`${name}\` | \`helm pull ${chart_oci}/${name} --version ${CHART_VERSION}\` |" >> "$GITHUB_STEP_SUMMARY"
           done
+
+      - name: Commit Helm release bump
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No Helm file changes to commit."
+          else
+            git add helm/
+            git commit -m "chore(helm): release ${TAG} images and chart versions"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
