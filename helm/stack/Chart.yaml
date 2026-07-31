@@ -2,26 +2,26 @@ apiVersion: v2
 name: hammrly-stack
 description: Umbrella chart — deploy Hammrly gateway, orchestrator, query, catalog, and portal together
 type: application
-version: 0.2.0
-appVersion: "v0.2.0"
+version: 0.3.0
+appVersion: "v0.3.0"
 dependencies:
   - name: hammrly-gateway
     alias: gateway
-    version: 0.2.0
+    version: 0.3.0
     repository: file://../gateway
   - name: hammrly-orchestrator
     alias: orchestrator
-    version: 0.2.0
+    version: 0.3.0
     repository: file://../orchestrator
   - name: hammrly-query
     alias: query
-    version: 0.2.0
+    version: 0.3.0
     repository: file://../query
   - name: hammrly-catalog
     alias: catalog
-    version: 0.2.0
+    version: 0.3.0
     repository: file://../catalog
   - name: hammrly-portal
     alias: portal
-    version: 0.2.0
+    version: 0.3.0
     repository: file://../portal
