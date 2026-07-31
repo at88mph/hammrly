@@ -1,0 +1,315 @@
+# Release pipeline: build/push images to GHCR, bump Helm, publish charts as OCI.
+#
+# Triggers:
+#   - push a Git tag (e.g. v1.2.0), or
+#   - run workflow_dispatch and set release_tag (e.g. v1.2.0)
+#
+# Images are published as:
+#   ghcr.io/<owner>/<repo>/{gateway,orchestrator,query,catalog,portal}:{tag,latest}
+#   ghcr.io/<owner>/<repo>/{desktop-base,desktop-astronomy}:{tag,latest}
+#
+# Helm charts are published as OCI to:
+#   oci://ghcr.io/<owner>/<repo>/charts
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to build (e.g. v1.2.0). Must already exist."
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  resolve-tag:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      chart_version: ${{ steps.resolve.outputs.chart_version }}
+    steps:
+      - name: Resolve tag
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ github.event.inputs.release_tag }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          if [ -z "${tag}" ]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+          chart_version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "chart_version=${chart_version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved TAG=${tag} CHART_VERSION=${chart_version}"
+
+  build-push-services:
+    name: Push ${{ matrix.service }}
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: gateway
+            dockerfile: services/gateway/Dockerfile
+          - service: orchestrator
+            dockerfile: services/orchestrator/Dockerfile
+          - service: query
+            dockerfile: services/query/Dockerfile
+          - service: catalog
+            dockerfile: services/catalog/Dockerfile
+          - service: portal
+            dockerfile: services/portal/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+          cache-from: |
+            type=gha,scope=release-${{ matrix.service }}
+            type=registry,ref=${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:buildcache
+          cache-to: |
+            type=gha,mode=max,scope=release-${{ matrix.service }}
+            type=registry,ref=${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:buildcache,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.resolve-tag.outputs.tag }}
+
+  build-push-desktop-base:
+    name: Push desktop-base
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/desktop/base/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}/desktop-base:latest
+          cache-from: |
+            type=gha,scope=release-desktop-base
+            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-base:buildcache
+          cache-to: |
+            type=gha,mode=max,scope=release-desktop-base
+            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-base:buildcache,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.resolve-tag.outputs.tag }}
+
+  build-push-desktop-astronomy:
+    name: Push desktop-astronomy
+    needs: [resolve-tag, build-push-desktop-base]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/desktop/astronomy/Dockerfile
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE_PREFIX }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/desktop-astronomy:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}/desktop-astronomy:latest
+          cache-from: |
+            type=gha,scope=release-desktop-astronomy
+            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-astronomy:buildcache
+          cache-to: |
+            type=gha,mode=max,scope=release-desktop-astronomy
+            type=registry,ref=${{ env.IMAGE_PREFIX }}/desktop-astronomy:buildcache,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.resolve-tag.outputs.tag }}
+
+  # Disabled until a GPU-enabled runner is available (matches former GitLab job).
+  # build-push-desktop-gpu:
+  #   name: Push desktop-astronomy-gpu
+  #   needs: [resolve-tag, build-push-desktop-astronomy]
+  #   runs-on: ubuntu-latest
+  #   steps: ...
+
+  helm-publish:
+    name: Publish Helm charts
+    needs:
+      - resolve-tag
+      - build-push-services
+      - build-push-desktop-astronomy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Bump chart versions and image refs
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+          CHART_VERSION: ${{ needs.resolve-tag.outputs.chart_version }}
+          GW: ${{ env.IMAGE_PREFIX }}/gateway
+          ORCH: ${{ env.IMAGE_PREFIX }}/orchestrator
+          QRY: ${{ env.IMAGE_PREFIX }}/query
+          CAT: ${{ env.IMAGE_PREFIX }}/catalog
+          PRT: ${{ env.IMAGE_PREFIX }}/portal
+        run: |
+          set -euo pipefail
+          for chart in gateway orchestrator query catalog portal stack; do
+            yq -i ".version = strenv(CHART_VERSION) | .appVersion = strenv(TAG)" "helm/${chart}/Chart.yaml"
+          done
+
+          yq -i '.image.repository = strenv(GW) | .image.tag = strenv(TAG)' helm/gateway/values.yaml
+          yq -i '.image.repository = strenv(ORCH) | .image.tag = strenv(TAG)' helm/orchestrator/values.yaml
+          yq -i '.image.repository = strenv(QRY) | .image.tag = strenv(TAG)' helm/query/values.yaml
+          yq -i '.image.repository = strenv(CAT) | .image.tag = strenv(TAG)' helm/catalog/values.yaml
+          yq -i '.image.repository = strenv(PRT) | .image.tag = strenv(TAG)' helm/portal/values.yaml
+          yq -i ".gateway.image.repository = strenv(GW) | .gateway.image.tag = strenv(TAG) | .orchestrator.image.repository = strenv(ORCH) | .orchestrator.image.tag = strenv(TAG) | .query.image.repository = strenv(QRY) | .query.image.tag = strenv(TAG) | .catalog.image.repository = strenv(CAT) | .catalog.image.tag = strenv(TAG) | .portal.image.repository = strenv(PRT) | .portal.image.tag = strenv(TAG)" helm/stack/values.yaml
+
+          yq -i ".dependencies[] |= .version = strenv(CHART_VERSION)" helm/stack/Chart.yaml
+          helm dependency update helm/stack
+
+      - name: Commit Helm release bump
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No Helm file changes to commit."
+          else
+            git add helm/
+            git commit -m "chore(helm): release ${TAG} images and chart versions"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          fi
+
+      - name: Package charts
+        run: |
+          set -euo pipefail
+          mkdir -p dist/charts
+          for chart in gateway orchestrator query catalog portal; do
+            helm package --dependency-update "helm/${chart}" -d dist/charts
+          done
+          helm package --dependency-update helm/stack -d dist/charts
+          ls -la dist/charts/
+
+      - name: Log in to GHCR (Helm OCI)
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Push charts to GHCR
+        run: |
+          set -euo pipefail
+          chart_oci="oci://${{ env.IMAGE_PREFIX }}/charts"
+          for pkg in dist/charts/*.tgz; do
+            echo "Pushing ${pkg} to ${chart_oci}"
+            helm push "${pkg}" "${chart_oci}"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
+          name: ${{ needs.resolve-tag.outputs.tag }}
+          generate_release_notes: true
+          files: dist/charts/*.tgz
+          fail_on_unmatched_files: true

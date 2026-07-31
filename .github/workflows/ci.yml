@@ -1,0 +1,127 @@
+# Container validation on pull requests and pushes to main/master.
+#
+# Service images (gateway, orchestrator, query, catalog, portal):
+#   multi-arch build only (cacheonly) — no registry push.
+#
+# Desktop images (base → astronomy → gpu):
+#   layered build; pipeline-scoped tags are pushed to GHCR so derived
+#   layers can resolve build-args. GPU stays cacheonly (no GPU workers yet).
+#
+# Images (when pushed):
+#   ghcr.io/<owner>/<repo>/{desktop-base,desktop-astronomy}:pipeline-<run_id>
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-services:
+    name: Build ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: gateway
+            dockerfile: services/gateway/Dockerfile
+          - service: orchestrator
+            dockerfile: services/orchestrator/Dockerfile
+          - service: query
+            dockerfile: services/query/Dockerfile
+          - service: catalog
+            dockerfile: services/catalog/Dockerfile
+          - service: portal
+            dockerfile: services/portal/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (cacheonly)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=service-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=service-${{ matrix.service }}
+
+  build-desktop:
+    name: Build desktop images
+    runs-on: ubuntu-latest
+    # Intermediate layers are pushed to GHCR; skip for fork PRs (no package write).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push desktop-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/desktop/base/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/desktop-base:pipeline-${{ github.run_id }}
+          cache-from: type=gha,scope=desktop
+          cache-to: type=gha,mode=max,scope=desktop
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push desktop-astronomy
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/desktop/astronomy/Dockerfile
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE_PREFIX }}/desktop-base:pipeline-${{ github.run_id }}
+          tags: ${{ env.IMAGE_PREFIX }}/desktop-astronomy:pipeline-${{ github.run_id }}
+          cache-from: type=gha,scope=desktop
+          cache-to: type=gha,mode=max,scope=desktop
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build desktop-astronomy-gpu (cacheonly)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/desktop/gpu/Dockerfile
+          outputs: type=cacheonly
+          build-args: |
+            ASTRONOMY_IMAGE=${{ env.IMAGE_PREFIX }}/desktop-astronomy:pipeline-${{ github.run_id }}
+          cache-from: type=gha,scope=desktop
+          cache-to: type=gha,mode=max,scope=desktop
