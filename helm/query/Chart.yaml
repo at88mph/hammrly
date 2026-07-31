@@ -3,4 +3,4 @@ name: hammrly-query
 description: Hammrly query — read-only job metadata and events API (PostgreSQL + JWT)
 type: application
 version: 0.2.0
-appVersion: "0.2.0"
+appVersion: "v0.2.0"
