@@ -1,22 +1,37 @@
 import { Link, useParams } from "@tanstack/react-router";
+import { EventTimeline } from "../components/EventTimeline.jsx";
+import { JobPhaseStepper } from "../components/JobPhaseStepper.jsx";
 import { useJobPoll } from "../hooks/useJobPoll.js";
 import { statusColor } from "../utils.js";
 
 export function SessionDetailPage() {
   const { jobId } = useParams({ from: "/sessions/$jobId" });
+  return <JobDetailView jobId={jobId} backTo="/" backLabel="← Home" title="Session" />;
+}
+
+/**
+ * Shared job detail for interactive sessions and headless campaign jobs.
+ * @param {{ jobId: string, backTo?: string, backLabel?: string, title?: string }} props
+ */
+export function JobDetailView({
+  jobId,
+  backTo = "/",
+  backLabel = "← Home",
+  title = "Job",
+}) {
   const { data: job, isLoading, isError, error } = useJobPoll(jobId);
 
   if (isLoading) {
-    return <p className="text-slate-600">Loading session…</p>;
+    return <p className="text-slate-600">Loading {title.toLowerCase()}…</p>;
   }
 
   if (isError || !job) {
     return (
       <div className="rounded border border-red-200 bg-red-50 p-4 text-red-700">
-        {error instanceof Error ? error.message : "Session not found"}
+        {error instanceof Error ? error.message : `${title} not found`}
         <div className="mt-2">
-          <Link to="/" className="text-sm text-portal-accent hover:underline">
-            Back to Home
+          <Link to={backTo} className="text-sm text-portal-accent hover:underline">
+            {backLabel}
           </Link>
         </div>
       </div>
@@ -28,10 +43,10 @@ export function SessionDetailPage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <Link to="/" className="text-sm text-portal-accent hover:underline">
-        ← Home
+      <Link to={backTo} className="text-sm text-portal-accent hover:underline">
+        {backLabel}
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold text-slate-900">Session</h1>
+      <h1 className="mt-4 text-2xl font-semibold text-slate-900">{title}</h1>
       <p className="mt-1 font-mono text-sm text-slate-600">{job.job_id}</p>
 
       <div
@@ -54,12 +69,15 @@ export function SessionDetailPage() {
             </a>
           )}
         </div>
-        {job.status_detail && isFailed && (
-          <p className="mt-3 text-sm text-red-700">{job.status_detail}</p>
+        <JobPhaseStepper status={job.status} />
+        {job.status_detail && (
+          <p className={`mt-3 text-sm ${isFailed ? "text-red-700" : "text-slate-600"}`}>
+            {job.status_detail}
+          </p>
         )}
-        {!canOpen && !isFailed && (
+        {!canOpen && !isFailed && job.status !== "succeeded" && (
           <p className="mt-3 text-sm text-slate-600">
-            Session is provisioning. This page refreshes automatically.
+            This page refreshes automatically while the job is in progress.
           </p>
         )}
       </div>
@@ -81,6 +99,26 @@ export function SessionDetailPage() {
           <dt className="text-slate-500">Cluster</dt>
           <dd>{job.cluster_id}</dd>
         </div>
+        {job.campaign_id && (
+          <div>
+            <dt className="text-slate-500">Campaign</dt>
+            <dd>
+              <Link
+                to="/campaigns/$campaignId"
+                params={{ campaignId: job.campaign_id }}
+                className="font-mono text-portal-accent hover:underline"
+              >
+                {job.campaign_id}
+              </Link>
+            </dd>
+          </div>
+        )}
+        {job.item_key && (
+          <div>
+            <dt className="text-slate-500">Item key</dt>
+            <dd className="font-mono">{job.item_key}</dd>
+          </div>
+        )}
         <div>
           <dt className="text-slate-500">Created</dt>
           <dd>{new Date(job.created_at).toLocaleString()}</dd>
@@ -93,25 +131,7 @@ export function SessionDetailPage() {
 
       <section className="mt-8">
         <h2 className="text-lg font-medium text-slate-900">Event timeline</h2>
-        {job.events?.length ? (
-          <ol className="mt-4 space-y-3">
-            {job.events.map((ev) => (
-              <li
-                key={ev.id}
-                className="rounded border border-slate-200 bg-white px-4 py-3 text-sm"
-              >
-                <div className="flex justify-between gap-4">
-                  <span className="font-medium text-slate-800">{ev.event_type}</span>
-                  <time className="text-slate-500">
-                    {new Date(ev.occurred_at).toLocaleString()}
-                  </time>
-                </div>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="mt-2 text-sm text-slate-500">No events yet.</p>
-        )}
+        <EventTimeline events={job.events} />
       </section>
     </div>
   );

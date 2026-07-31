@@ -48,6 +48,12 @@ Write an error manifest to `HAMMRLY_ERROR_FILE` when the workload cannot produce
 }
 ```
 
+When the output-watcher sidecar observes this file, it emits a structured log line
+(`HAMMRLY_WORKLOAD_ERROR=…`) and exits nonzero. The orchestrator scrapes that line
+(or the Job annotation `hammrly.io/workload-error` when present), persists a
+`workload_error` submission event, and sets `submissions.status_detail` to
+`"{code}: {message}"` so Query/Portal can surface the failure without kubectl.
+
 ## Helper script
 
 `hammrly_runtime.py` is dependency-free and can be copied into an image or fetched over HTTP during image build.

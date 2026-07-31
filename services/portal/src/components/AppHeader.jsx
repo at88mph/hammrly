@@ -1,3 +1,5 @@
+import { NotificationBell } from "./NotificationBell.jsx";
+
 const logoUrl = `${import.meta.env.BASE_URL}hammrly-logo.png`;
 
 export function AppHeader({ profile, onSignOut }) {
@@ -15,6 +17,7 @@ export function AppHeader({ profile, onSignOut }) {
         )}
       </div>
       <div className="flex items-center gap-4 text-sm">
+        {profile && <NotificationBell />}
         {profile && (
           <span className="text-slate-300">
             {profile.displayName || profile.sub}

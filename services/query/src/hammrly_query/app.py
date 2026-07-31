@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Annotated, Any, Generator, Optional
+from typing import Annotated, Any, AsyncIterator, Generator, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,15 +20,24 @@ from hammrly_query.contract_types import PayloadSummary, WorkloadKind, parse_pay
 from hammrly_query.job_index import get_job_index, index_owned_by_principal, index_to_detail
 from hammrly_query.jwt_auth import Principal, validate_bearer_token
 from hammrly_query.repository import (
+    count_unread_notifications,
     counts_int,
     get_campaign_by_id,
     get_submission_by_job_id,
+    latest_notification_id,
     list_campaign_failed_sample,
     list_campaign_jobs,
     list_interactive_submissions,
+    list_notifications,
     list_submission_events,
+    mark_all_notifications_read,
+    mark_notification_read,
 )
-from hammrly_query.session import create_engine_from_url, create_session_factory
+from hammrly_query.session import (
+    create_engine_from_url,
+    create_session_factory,
+    create_writable_engine_from_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +50,8 @@ async def lifespan(app: FastAPI):
     if settings.skip_db_bootstrap:
         app.state.engine = None
         app.state.session_factory = None
+        app.state.rw_engine = None
+        app.state.rw_session_factory = None
         logger.info("Query service started (skip_db_bootstrap; no engine)")
     elif not settings.database_url:
         raise RuntimeError("HAMMRLY_DATABASE_URL is required unless HAMMRLY_SKIP_DB_BOOTSTRAP=true")
@@ -46,7 +59,10 @@ async def lifespan(app: FastAPI):
         engine = create_engine_from_url(settings.database_url)
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
-        logger.info("Query service started (read-only DB session factory ready)")
+        rw_engine = create_writable_engine_from_url(settings.database_url)
+        app.state.rw_engine = rw_engine
+        app.state.rw_session_factory = create_session_factory(rw_engine)
+        logger.info("Query service started (read-only + writable DB session factories ready)")
 
     if settings.redis_fake:
         import fakeredis
@@ -72,7 +88,10 @@ async def lifespan(app: FastAPI):
     engine = getattr(app.state, "engine", None)
     if engine is not None:
         engine.dispose()
-        logger.info("Query engine disposed")
+    rw_engine = getattr(app.state, "rw_engine", None)
+    if rw_engine is not None:
+        rw_engine.dispose()
+    logger.info("Query engines disposed")
 
 
 router = APIRouter()
@@ -170,6 +189,27 @@ class InteractiveJobListResponse(BaseModel):
     offset: int
 
 
+class NotificationItem(BaseModel):
+    id: int
+    kind: str
+    subject: str
+    body_json: dict[str, Any] = Field(default_factory=dict)
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    created_at: datetime
+    read_at: Optional[datetime] = None
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationItem]
+    limit: int
+    offset: int
+
+
+class UnreadCountResponse(BaseModel):
+    unread_count: int
+
+
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
@@ -188,8 +228,23 @@ def get_db(request: Request) -> Generator[Session, None, None]:
         session.close()
 
 
+def get_rw_db(request: Request) -> Generator[Session, None, None]:
+    factory: Optional[sessionmaker[Session]] = getattr(request.app.state, "rw_session_factory", None)
+    if factory is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "database_unconfigured", "message": "Writable session factory not available"},
+        )
+    session = factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_db)]
+RwSessionDep = Annotated[Session, Depends(get_rw_db)]
 
 
 async def require_principal(
@@ -465,6 +520,149 @@ def list_my_interactive_jobs(
         items=[_to_interactive_item(r) for r in rows],
         limit=lim,
         offset=offset,
+    )
+
+
+def _to_notification_item(row: Any) -> NotificationItem:
+    return NotificationItem(
+        id=row.id,
+        kind=row.kind,
+        subject=row.subject,
+        body_json=row.body_json if isinstance(row.body_json, dict) else {},
+        resource_type=row.resource_type,
+        resource_id=row.resource_id,
+        created_at=row.created_at,
+        read_at=row.read_at,
+    )
+
+
+@router.get(
+    "/v1/me/notifications",
+    response_model=NotificationListResponse,
+    responses={401: {"description": "Unauthenticated"}, 403: {"description": "Forbidden"}},
+)
+def list_my_notifications(
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    db: SessionDep,
+    unread_only: bool = Query(False),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> NotificationListResponse:
+    lim = min(limit, settings.list_max_limit)
+    rows = list_notifications(
+        db, principal, unread_only=unread_only, limit=lim, offset=offset
+    )
+    return NotificationListResponse(
+        items=[_to_notification_item(r) for r in rows],
+        limit=lim,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/v1/me/notifications/unread_count",
+    response_model=UnreadCountResponse,
+    responses={401: {"description": "Unauthenticated"}, 403: {"description": "Forbidden"}},
+)
+def get_unread_notification_count(
+    principal: PrincipalDep,
+    db: SessionDep,
+) -> UnreadCountResponse:
+    return UnreadCountResponse(unread_count=count_unread_notifications(db, principal))
+
+
+@router.post(
+    "/v1/me/notifications/{notification_id}/read",
+    response_model=NotificationItem,
+    responses={
+        401: {"description": "Unauthenticated"},
+        403: {"description": "Forbidden"},
+        404: {"description": "Not found"},
+    },
+)
+def mark_my_notification_read(
+    notification_id: int,
+    principal: PrincipalDep,
+    db: RwSessionDep,
+) -> NotificationItem:
+    row = mark_notification_read(db, principal, notification_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Notification not found or access denied"},
+        )
+    return _to_notification_item(row)
+
+
+@router.post(
+    "/v1/me/notifications/read_all",
+    response_model=UnreadCountResponse,
+    responses={401: {"description": "Unauthenticated"}, 403: {"description": "Forbidden"}},
+)
+def mark_all_my_notifications_read(
+    principal: PrincipalDep,
+    db: RwSessionDep,
+) -> UnreadCountResponse:
+    mark_all_notifications_read(db, principal)
+    return UnreadCountResponse(unread_count=0)
+
+
+@router.get(
+    "/v1/me/notifications/stream",
+    responses={401: {"description": "Unauthenticated"}, 403: {"description": "Forbidden"}},
+)
+async def stream_my_notifications(
+    request: Request,
+    principal: PrincipalDep,
+) -> StreamingResponse:
+    """SSE stream of unread_count bumps for the authenticated user (Bearer via fetch)."""
+
+    async def event_gen() -> AsyncIterator[str]:
+        factory: Optional[sessionmaker[Session]] = request.app.state.session_factory
+        if factory is None:
+            yield f"event: error\ndata: {json.dumps({'error': 'database_unconfigured'})}\n\n"
+            return
+
+        last_id = 0
+        last_unread = -1
+        # Initial snapshot
+        db = factory()
+        try:
+            last_id = int(latest_notification_id(db, principal) or 0)
+            last_unread = count_unread_notifications(db, principal)
+        finally:
+            db.close()
+        yield f"event: snapshot\ndata: {json.dumps({'unread_count': last_unread, 'latest_id': last_id})}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(2.0)
+            db = factory()
+            try:
+                latest = int(latest_notification_id(db, principal) or 0)
+                unread = count_unread_notifications(db, principal)
+            finally:
+                db.close()
+            if latest != last_id or unread != last_unread:
+                last_id = latest
+                last_unread = unread
+                yield (
+                    "event: notification\n"
+                    f"data: {json.dumps({'unread_count': unread, 'latest_id': latest})}\n\n"
+                )
+            else:
+                yield ": keepalive\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

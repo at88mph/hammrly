@@ -15,7 +15,13 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 # ORM models (metadata for autogenerate)
-from hammrly_orchestrator.persistence.models import Base
+from hammrly_orchestrator.persistence.models import (  # noqa: F401
+    Base,
+    Campaign,
+    Submission,
+    SubmissionEvent,
+    UserNotification,
+)
 
 config = context.config
 

@@ -16,8 +16,11 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
-  # Events / status: Job watch lists Jobs only; optional Pod read for debugging
+  # Events / status: Job watch lists Jobs only; pod logs scrape workload error manifests
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
 {{- end }}

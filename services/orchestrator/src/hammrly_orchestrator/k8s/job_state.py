@@ -8,6 +8,52 @@ from kubernetes.client import V1Job
 from hammrly_orchestrator.k8s.labels import LABEL_JOB_ID, LABEL_SUBMISSION_ID, LABEL_USER_ID
 
 
+def _job_counts(job: V1Job) -> dict[str, int]:
+    status = job.status
+    return {
+        "active": int(status.active or 0) if status else 0,
+        "succeeded": int(status.succeeded or 0) if status else 0,
+        "failed": int(status.failed or 0) if status else 0,
+    }
+
+
+def condition_summaries(job: V1Job) -> list[dict[str, Any]]:
+    status = job.status
+    conditions = list(status.conditions or []) if status else []
+    out: list[dict[str, Any]] = []
+    for c in conditions:
+        out.append(
+            {
+                "type": getattr(c, "type", None),
+                "status": getattr(c, "status", None),
+                "reason": getattr(c, "reason", None),
+                "message": (str(getattr(c, "message", None))[:1000] if getattr(c, "message", None) else None),
+            }
+        )
+    return out
+
+
+def watch_event_payload(
+    job: V1Job,
+    *,
+    label_job_id: Optional[str] = None,
+    status_detail: Optional[str] = None,
+) -> dict[str, Any]:
+    meta = job.metadata
+    rv = meta.resource_version if meta else None
+    spec = job.spec
+    payload: dict[str, Any] = {
+        "resource_version": rv,
+        "label_job_id": label_job_id,
+        "counts": _job_counts(job),
+        "suspend": getattr(spec, "suspend", None) if spec else None,
+        "conditions": condition_summaries(job),
+    }
+    if status_detail:
+        payload["status_detail"] = status_detail[:2000]
+    return payload
+
+
 def map_job_to_submission_status(job: V1Job) -> tuple[str, Optional[str]]:
     """
     Map Kubernetes Job state to submissions.status / status_detail.
@@ -26,8 +72,9 @@ def map_job_to_submission_status(job: V1Job) -> tuple[str, Optional[str]]:
 
     spec = job.spec
     spec_suspend = getattr(spec, "suspend", None) if spec else None
-    active = int(status.active or 0) if status else 0
-    failed_ct = int(status.failed or 0) if status else 0
+    counts = _job_counts(job)
+    active = counts["active"]
+    failed_ct = counts["failed"]
 
     if active > 0:
         return "running", None

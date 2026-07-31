@@ -10,7 +10,9 @@ import { getAppBasePath } from "./auth/config.js";
 import { useAuth } from "./auth/AuthProvider.jsx";
 import { AppShell } from "./components/AppShell.jsx";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage.jsx";
+import { CampaignDetailPage } from "./pages/CampaignDetailPage.jsx";
 import { HomePage } from "./pages/HomePage.jsx";
+import { JobDetailPage } from "./pages/JobDetailPage.jsx";
 import { LoginPage } from "./pages/LoginPage.jsx";
 import { NewSessionPage } from "./pages/NewSessionPage.jsx";
 import { SessionDetailPage } from "./pages/SessionDetailPage.jsx";
@@ -93,6 +95,18 @@ const sessionDetailRoute = createRoute({
   component: SessionDetailPage,
 });
 
+const jobDetailRoute = createRoute({
+  getParentRoute: () => authenticatedLayoutRoute,
+  path: "/jobs/$jobId",
+  component: JobDetailPage,
+});
+
+const campaignDetailRoute = createRoute({
+  getParentRoute: () => authenticatedLayoutRoute,
+  path: "/campaigns/$campaignId",
+  component: CampaignDetailPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authCallbackRoute,
@@ -100,6 +114,8 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     newSessionRoute,
     sessionDetailRoute,
+    jobDetailRoute,
+    campaignDetailRoute,
   ]),
 ]);
 

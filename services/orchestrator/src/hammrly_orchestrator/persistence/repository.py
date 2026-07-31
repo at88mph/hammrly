@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -8,16 +9,27 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from hammrly_orchestrator.k8s.job_state import map_job_to_submission_status
+from hammrly_orchestrator.k8s.job_state import map_job_to_submission_status, watch_event_payload
 from hammrly_orchestrator.k8s.labels import (
     LABEL_SUBMISSION_ID,
     normalize_job_id_label_value,
     normalize_user_id_label_value,
 )
 from hammrly_orchestrator.k8s.pod_spec import effective_gpu_count
-from hammrly_orchestrator.persistence.models import Campaign, Submission, SubmissionEvent
+from hammrly_orchestrator.k8s.workload_error import compact_error_payload, status_detail_from_error
+from hammrly_orchestrator.persistence.models import (
+    Campaign,
+    Submission,
+    SubmissionEvent,
+    UserNotification,
+)
 
 logger = logging.getLogger(__name__)
+
+TERMINAL_SUBMISSION_STATUSES = frozenset(
+    {"succeeded", "failed", "unknown", "cancelled", "dead_letter"}
+)
+FAILURE_LIKE_STATUSES = frozenset({"failed", "unknown", "cancelled", "dead_letter"})
 
 
 def _parse_requested_at(raw: Any) -> Optional[datetime]:
@@ -202,6 +214,7 @@ class SubmissionRepository:
         deleted: bool = False,
         label_job_id: Optional[str] = None,
         label_user_id: Optional[str] = None,
+        workload_error: Optional[dict[str, Any]] = None,
     ) -> None:
         """Persist status from a Job watch event. `job` is V1Job."""
         from kubernetes.client import V1Job
@@ -222,6 +235,11 @@ class SubmissionRepository:
             detail = "Job object deleted in cluster"
         else:
             new_status, detail = map_job_to_submission_status(job)
+
+        err_payload: Optional[dict[str, Any]] = None
+        if workload_error and new_status == "failed" and not deleted:
+            err_payload = compact_error_payload(workload_error)
+            detail = status_detail_from_error(workload_error)
 
         with self._session() as session:
             row = session.get(Submission, sid)
@@ -253,6 +271,7 @@ class SubmissionRepository:
                 and str(rv or "") == str(row.k8s_resource_version or "")
                 and row.status == new_status
                 and (detail or None) == (row.status_detail or None)
+                and err_payload is None
             ):
                 return
 
@@ -260,28 +279,40 @@ class SubmissionRepository:
                 return
 
             old_status = row.status
+            already_had_workload_error = False
+            if err_payload is not None:
+                # Avoid duplicate workload_error events on repeated watch ticks.
+                existing = session.scalars(
+                    select(SubmissionEvent.event_type).where(
+                        SubmissionEvent.submission_id == sid,
+                        SubmissionEvent.event_type == "workload_error",
+                    )
+                ).first()
+                already_had_workload_error = existing is not None
+
             row.status = new_status
             row.status_detail = detail
             if rv:
                 row.k8s_resource_version = str(rv)
             self._touch(now, row)
             evt = "job_deleted" if deleted else f"watch_{new_status}"
-            self._add_event(
-                session,
-                sid,
-                evt,
-                {
-                    "resource_version": rv,
-                    "label_job_id": label_job_id,
-                },
+            payload = watch_event_payload(
+                job,
+                label_job_id=label_job_id,
+                status_detail=detail,
             )
-            if row.campaign_id and old_status != new_status:
+            self._add_event(session, sid, evt, payload)
+            if err_payload is not None and not already_had_workload_error:
+                self._add_event(session, sid, "workload_error", err_payload)
+            campaign_id = row.campaign_id
+            if campaign_id and old_status != new_status:
                 self._rollup_submission_status_in_session(
                     session,
-                    row.campaign_id,
+                    campaign_id,
                     old_status=old_status,
                     new_status=new_status,
                 )
+                self._maybe_finalize_campaign_terminal(session, campaign_id)
 
     def mark_cluster_job_missing(self, submission_id: str, reason: str) -> None:
         now = datetime.now(timezone.utc)
@@ -293,10 +324,16 @@ class SubmissionRepository:
             if row.status in ("succeeded", "failed", "unknown"):
                 return
 
+            old_status = row.status
             row.status = "unknown"
             row.status_detail = reason[:2000]
             self._touch(now, row)
             self._add_event(session, submission_id, "cluster_job_missing", {"reason": reason})
+            if row.campaign_id and old_status != "unknown":
+                self._rollup_submission_status_in_session(
+                    session, row.campaign_id, old_status=old_status, new_status="unknown"
+                )
+                self._maybe_finalize_campaign_terminal(session, row.campaign_id)
 
     def mark_session_ready(self, submission_id: str) -> None:
         """Mark an ingress-backed interactive session ready to open (idempotent)."""
@@ -357,6 +394,107 @@ class SubmissionRepository:
         self._counts_adjust(counts, new_status, 1)
         camp.counts_json = counts
         self._touch(datetime.now(timezone.utc), camp)
+
+    def _terminal_count(self, counts: dict[str, Any]) -> int:
+        return sum(self._counts_get(counts, s) for s in TERMINAL_SUBMISSION_STATUSES)
+
+    def _succeeded_count(self, counts: dict[str, Any]) -> int:
+        return self._counts_get(counts, "succeeded")
+
+    def _failure_like_count(self, counts: dict[str, Any]) -> int:
+        return sum(self._counts_get(counts, s) for s in FAILURE_LIKE_STATUSES)
+
+    def _maybe_finalize_campaign_terminal(self, session: Session, campaign_id: str) -> None:
+        """Set campaign terminal status from Job outcomes and emit one digest notification."""
+        camp = session.get(Campaign, campaign_id)
+        if camp is None:
+            return
+
+        item_count = camp.item_count or 0
+        if item_count <= 0:
+            return
+
+        counts = dict(camp.counts_json or {})
+        terminal = self._terminal_count(counts)
+        if terminal < item_count:
+            return
+
+        succeeded = self._succeeded_count(counts)
+        failed_like = self._failure_like_count(counts)
+        if succeeded <= 0 and failed_like >= item_count:
+            new_status = "failed"
+        elif failed_like > 0:
+            new_status = "partial_failed"
+        else:
+            new_status = "completed"
+
+        now = datetime.now(timezone.utc)
+        if camp.status != new_status:
+            camp.status = new_status
+            self._touch(now, camp)
+
+        self._ensure_campaign_terminal_notification(session, camp)
+
+    def _ensure_campaign_terminal_notification(self, session: Session, camp: Campaign) -> None:
+        dedupe = f"campaign_terminal:{camp.campaign_id}:{camp.status}"
+        existing = session.scalar(
+            select(UserNotification.id).where(UserNotification.dedupe_key == dedupe)
+        )
+        if existing is not None:
+            return
+
+        counts = dict(camp.counts_json or {})
+        fail_count = self._counts_get(counts, "failed")
+        item_count = camp.item_count or 0
+        fail_pct = round(100.0 * fail_count / item_count, 1) if item_count else 0.0
+
+        failed_rows = session.scalars(
+            select(Submission)
+            .where(
+                Submission.campaign_id == camp.campaign_id,
+                Submission.status == "failed",
+            )
+            .order_by(Submission.updated_at.desc())
+            .limit(10)
+        ).all()
+        failed_sample = [
+            {
+                "job_id": r.job_id,
+                "item_key": r.item_key,
+                "status": r.status,
+                "status_detail": r.status_detail,
+            }
+            for r in failed_rows
+        ]
+
+        subject = f"Campaign {camp.name}: {camp.status}"
+        if fail_count:
+            subject = f"Campaign {camp.name}: {camp.status} ({fail_count} failed)"
+
+        body = {
+            "campaign_id": camp.campaign_id,
+            "name": camp.name,
+            "status": camp.status,
+            "item_count": item_count,
+            "by_status": {k: int(v) for k, v in counts.items() if self._counts_get(counts, k)},
+            "fail_count": fail_count,
+            "fail_pct": fail_pct,
+            "failed_sample": failed_sample,
+            "portal_path": f"/campaigns/{camp.campaign_id}",
+        }
+        session.add(
+            UserNotification(
+                user_id=camp.user_id,
+                tenant_id=camp.tenant_id,
+                kind="campaign_terminal",
+                subject=subject[:512],
+                body_json=body,
+                resource_type="campaign",
+                resource_id=camp.campaign_id,
+                dedupe_key=dedupe,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
 
     def ensure_campaign(self, envelope: dict[str, Any], *, cluster_id: str) -> None:
         campaign_id = str(envelope["campaign_id"])
@@ -451,26 +589,73 @@ class SubmissionRepository:
             self._rollup_submission_status_in_session(
                 session, campaign_id, old_status=old_status, new_status=new_status
             )
+            self._maybe_finalize_campaign_terminal(session, campaign_id)
 
     def record_campaign_item_failed(self, campaign_id: str, *, item_key: str, detail: str) -> None:
-        self.adjust_campaign_status_count(campaign_id, "failed", 1)
+        """Record an expansion-time item failure as a durable failed submission."""
+        now = datetime.now(timezone.utc)
+        submission_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+        with self._session() as session:
+            camp = session.get(Campaign, campaign_id)
+            if camp is None:
+                return
+            existing = session.scalar(
+                select(Submission.submission_id).where(
+                    Submission.campaign_id == campaign_id,
+                    Submission.item_key == item_key,
+                )
+            )
+            if existing is not None:
+                return
+
+            summary = dict(camp.template_summary or {})
+            summary.setdefault("kind", "headless")
+            row = Submission(
+                submission_id=submission_id,
+                job_id=job_id,
+                tenant_id=camp.tenant_id,
+                project_id=camp.project_id,
+                user_id=camp.user_id,
+                status="failed",
+                status_detail=(detail or "campaign item expansion failed")[:2000],
+                queue_name="n/a",
+                priority=None,
+                gpu_count=int(summary.get("gpu_count") or 0),
+                cluster_id=camp.cluster_id,
+                payload_summary=summary,
+                campaign_id=campaign_id,
+                item_key=item_key,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+            self._add_event(
+                session,
+                submission_id,
+                "campaign_item_failed",
+                {"item_key": item_key, "error": (detail or "")[:4000]},
+            )
+            counts = dict(camp.counts_json or {})
+            self._counts_adjust(counts, "failed", 1)
+            camp.counts_json = counts
+            if camp.status in ("accepted", "expanding"):
+                camp.status = "active"
+            self._touch(now, camp)
+            self._maybe_finalize_campaign_terminal(session, campaign_id)
 
     def finalize_campaign_expansion(self, campaign_id: str) -> None:
+        """Mark expansion finished. Terminal status is deferred to Job outcomes."""
         now = datetime.now(timezone.utc)
         with self._session() as session:
             row = session.get(Campaign, campaign_id)
             if row is None:
                 return
-            counts = row.counts_json or {}
-            failed = self._counts_get(counts, "failed")
-            item_count = row.item_count or 0
-            if item_count and failed >= item_count:
-                row.status = "failed"
-            elif failed > 0:
-                row.status = "partial_failed"
-            else:
-                row.status = "completed"
+            if row.status in ("accepted", "expanding"):
+                row.status = "active"
             self._touch(now, row)
+            # If every item already failed during expansion, roll up immediately.
+            self._maybe_finalize_campaign_terminal(session, campaign_id)
 
     def mark_k8s_create_failed(self, submission_id: str, detail: str) -> None:
         now = datetime.now(timezone.utc)
@@ -483,8 +668,18 @@ class SubmissionRepository:
             row.status = "failed"
             row.status_detail = detail[:2000]
             self._touch(now, row)
-            self._add_event(session, submission_id, "k8s_create_err", {"error": detail[:4000]})
+            self._add_event(
+                session,
+                submission_id,
+                "k8s_create_err",
+                {
+                    "error": detail[:4000],
+                    "reason": "k8s_create_failed",
+                    "message": detail[:1000],
+                },
+            )
             if row.campaign_id and old_status != "failed":
                 self._rollup_submission_status_in_session(
                     session, row.campaign_id, old_status=old_status, new_status="failed"
                 )
+                self._maybe_finalize_campaign_terminal(session, row.campaign_id)

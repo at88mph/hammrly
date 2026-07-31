@@ -71,6 +71,11 @@ Every query applies:
 | `GET` | `/v1/me/jobs/interactive` | List **interactive** jobs for the caller |
 | `GET` | `/v1/me/campaigns/{campaign_id}` | Headless **campaign summary** (`fail_count`, `fail_pct`, `by_status`, …) |
 | `GET` | `/v1/me/campaigns/{campaign_id}/jobs` | Paginated jobs in a campaign (`status` filter, e.g. `failed`) |
+| `GET` | `/v1/me/notifications` | In-app notification inbox (`unread_only`, pagination) |
+| `GET` | `/v1/me/notifications/unread_count` | Cheap badge counter |
+| `GET` | `/v1/me/notifications/stream` | **SSE** unread/latest bumps (Bearer via `fetch` stream; not native `EventSource`) |
+| `POST` | `/v1/me/notifications/{id}/read` | Mark one notification read (`read_at`) |
+| `POST` | `/v1/me/notifications/read_all` | Mark all unread notifications read |
 | `GET` | `/.well-known/openapi.json` | OpenAPI document |
 | `GET` | `/internal/openapi.json` | Same (FastAPI default) |
 | `GET` | `/docs`, `/redoc` | Optional UI |
@@ -129,6 +134,25 @@ Headless status UX (summary-first). Poll after gateway **`202`** (campaign row m
 
 Paginated list; use `status=failed` for debugging. Not for full 100k exports.
 
+### 5.5 Notifications (in-app)
+
+Orchestrator writes **`user_notifications`** when a campaign reaches a Job-terminal rollup (one digest per campaign terminal status). Query exposes list/unread/SSE and marks `read_at`.
+
+Campaign digests use `kind=campaign_terminal` with `body_json` containing `campaign_id`, `status`, `item_count`, `by_status`, `fail_count`, `fail_pct`, `failed_sample`, and `portal_path`.
+
+SSE clients should use authenticated **`fetch`** streaming with `Authorization: Bearer` (native `EventSource` cannot set headers). Fallback: poll `unread_count`.
+
+### 5.6 Future notification sinks (not implemented)
+
+Same digest / `user_notifications` row is the source of truth. Deferred adapters:
+
+| Sink | Intent | Notes |
+|------|--------|-------|
+| **Webhook** | User/tenant URL POST of digest JSON | Preferences + URL validation; Slack Incoming Webhook compatible |
+| **Email** | One summary email per terminal campaign | Verified IdP email claim or prefs + SMTP |
+| **Slack app** | Channel/DM via Slack API | Deferred (app install / API tokens) |
+| **Web Push / SMS** | OS push or text | Not prioritized |
+
 ---
 
 ## 6. Configuration
@@ -151,8 +175,8 @@ Paginated list; use `status=failed` for debugging. Not for full 100k exports.
 ## 7. Operations
 
 - Run **beside** gateway on a different port or hostname.
-- Point at the **same** database as orchestrator, preferably a **read replica**.
-- Do **not** grant `INSERT`/`UPDATE`/`DELETE` to the query DB user.
+- Point at the **same** database as orchestrator, preferably a **read replica** for SELECTs.
+- Grant the query DB user **`SELECT`** on submissions/events/campaigns and **`SELECT`/`UPDATE`** on `user_notifications` (`read_at` only). Prefer no `INSERT`/`DELETE`.
 - TLS terminates at ingress; service speaks HTTP internally.
 
 ---

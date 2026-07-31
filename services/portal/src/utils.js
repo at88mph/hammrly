@@ -1,10 +1,37 @@
 const IN_FLIGHT = new Set([
   "pending",
   "received",
+  "building_spec",
+  "submitted_to_cluster",
   "running",
   "admitted",
   "queued",
 ]);
+
+/** Lifecycle phases for the job status stepper (interactive + headless). */
+export const JOB_PHASES = [
+  "received",
+  "building_spec",
+  "submitted_to_cluster",
+  "admitted",
+  "running",
+  "ready",
+  "succeeded",
+];
+
+/**
+ * @param {string} status
+ * @returns {number} index into JOB_PHASES, or -1 for failed/unknown
+ */
+export function phaseIndexForStatus(status) {
+  const s = status?.toLowerCase?.() ?? "";
+  if (s === "failed" || s === "dead_letter" || s === "unknown" || s === "cancelled") {
+    return -1;
+  }
+  if (s === "pending") return 0;
+  const idx = JOB_PHASES.indexOf(s);
+  return idx >= 0 ? idx : 0;
+}
 
 const TERMINAL = new Set([
   "ready",
@@ -101,10 +128,24 @@ export function formatRelativeTime(iso) {
 
 export function statusColor(status) {
   const s = status?.toLowerCase?.() ?? "";
-  if (s === "ready") return "bg-emerald-100 text-emerald-800";
-  if (s === "running" || s === "received" || s === "admitted") return "bg-blue-100 text-blue-800";
-  if (s === "failed" || s === "dead_letter") return "bg-red-100 text-red-800";
-  if (s === "pending") return "bg-amber-100 text-amber-800";
+  if (s === "ready" || s === "succeeded" || s === "completed") {
+    return "bg-emerald-100 text-emerald-800";
+  }
+  if (
+    s === "running" ||
+    s === "received" ||
+    s === "admitted" ||
+    s === "building_spec" ||
+    s === "submitted_to_cluster" ||
+    s === "active" ||
+    s === "expanding"
+  ) {
+    return "bg-blue-100 text-blue-800";
+  }
+  if (s === "failed" || s === "dead_letter" || s === "partial_failed") {
+    return "bg-red-100 text-red-800";
+  }
+  if (s === "pending" || s === "accepted") return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-slate-700";
 }
 

@@ -91,3 +91,21 @@ class SubmissionEvent(Base):
     )
 
     submission: Mapped["Submission"] = relationship("Submission", back_populates="events")
+
+
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(512), index=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    body_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    resource_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    resource_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

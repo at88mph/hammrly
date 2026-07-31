@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
 from hammrly_query.config import Settings
 from hammrly_query.jwt_auth import Principal
-from hammrly_query.models import Campaign, Submission, SubmissionEvent
+from hammrly_query.models import Campaign, Submission, SubmissionEvent, UserNotification
 
 
 def _scope_campaigns(stmt: Select[tuple[Campaign]], principal: Principal, settings: Settings) -> Select:
@@ -121,3 +122,89 @@ def list_campaign_jobs(
     stmt = _scope_submissions(stmt, principal, settings)
     stmt = stmt.order_by(Submission.updated_at.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt).all())
+
+
+def _scope_notifications(
+    stmt: Select[tuple[UserNotification]],
+    principal: Principal,
+) -> Select[tuple[UserNotification]]:
+    stmt = stmt.where(UserNotification.user_id == principal.user_id)
+    if principal.tenant_from_token:
+        stmt = stmt.where(UserNotification.tenant_id == principal.tenant_from_token)
+    return stmt
+
+
+def list_notifications(
+    session: Session,
+    principal: Principal,
+    *,
+    unread_only: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[UserNotification]:
+    stmt = select(UserNotification)
+    stmt = _scope_notifications(stmt, principal)
+    if unread_only:
+        stmt = stmt.where(UserNotification.read_at.is_(None))
+    stmt = stmt.order_by(UserNotification.created_at.desc()).limit(limit).offset(offset)
+    return list(session.scalars(stmt).all())
+
+
+def count_unread_notifications(session: Session, principal: Principal) -> int:
+    stmt = select(func.count()).select_from(UserNotification).where(
+        UserNotification.user_id == principal.user_id,
+        UserNotification.read_at.is_(None),
+    )
+    if principal.tenant_from_token:
+        stmt = stmt.where(UserNotification.tenant_id == principal.tenant_from_token)
+    return int(session.scalar(stmt) or 0)
+
+
+def get_notification(
+    session: Session,
+    principal: Principal,
+    notification_id: int,
+) -> Optional[UserNotification]:
+    stmt = select(UserNotification).where(UserNotification.id == notification_id)
+    stmt = _scope_notifications(stmt, principal)
+    return session.scalar(stmt)
+
+
+def mark_notification_read(
+    session: Session,
+    principal: Principal,
+    notification_id: int,
+) -> Optional[UserNotification]:
+    row = get_notification(session, principal, notification_id)
+    if row is None:
+        return None
+    if row.read_at is None:
+        row.read_at = datetime.now(timezone.utc)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+    return row
+
+
+def mark_all_notifications_read(session: Session, principal: Principal) -> int:
+    now = datetime.now(timezone.utc)
+    stmt = (
+        update(UserNotification)
+        .where(
+            UserNotification.user_id == principal.user_id,
+            UserNotification.read_at.is_(None),
+        )
+        .values(read_at=now)
+    )
+    if principal.tenant_from_token:
+        stmt = stmt.where(UserNotification.tenant_id == principal.tenant_from_token)
+    result = session.execute(stmt)
+    session.commit()
+    return int(result.rowcount or 0)
+
+
+def latest_notification_id(session: Session, principal: Principal) -> Optional[int]:
+    stmt = select(UserNotification.id)
+    stmt = _scope_notifications(stmt, principal)
+    stmt = stmt.order_by(UserNotification.id.desc()).limit(1)
+    return session.scalar(stmt)

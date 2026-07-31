@@ -177,6 +177,8 @@ print(f"Waiting for {completion_file} or {error_file}")
 while True:
     if error_file.exists():
         payload = read_json(error_file)
+        # Marker line for orchestrator log scrape + structured JSON for humans.
+        print("HAMMRLY_WORKLOAD_ERROR=" + json.dumps(payload, sort_keys=True, separators=(",", ":")))
         print(json.dumps({"status": "error", "payload": payload}, sort_keys=True))
         sys.exit(1)
     if completion_file.exists():

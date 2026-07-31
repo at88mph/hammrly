@@ -105,7 +105,7 @@ From the **repository root**, using the orchestrator image (no bind mount requir
 ```bash
 docker run --rm -w /app \
   -e HAMMRLY_DATABASE_URL='postgresql+psycopg2://user:pass@host:5432/hammrly' \
-  hammrly/orchestrator:0.1.0 \
+  hammrly/orchestrator:0.2.0 \
   alembic upgrade head
 ```
 

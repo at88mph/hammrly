@@ -227,9 +227,11 @@ For very early prototypes, **SQLite** could stand in locally; production should 
 | Before Kubernetes create | Orchestrator | `building_spec` |
 | Job created in API | Orchestrator | `k8s_create_ok` |
 | Job create failure | Orchestrator | `k8s_create_err` |
-| Watch: phase change | Orchestrator (Job watch thread) | `watch_submitted_to_cluster`, `watch_admitted`, `watch_running`, `watch_succeeded`, `watch_failed`, … |
+| Watch: phase change | Orchestrator (Job watch thread) | `watch_*` with condition/count payloads |
+| Workload error manifest | Orchestrator (Job watch + pod log scrape) | `workload_error`; sets `status_detail` to `"{code}: {message}"` |
 | Watch: Job deleted | Orchestrator | `job_deleted` |
 | Drift: Job missing in cluster | Orchestrator (periodic LIST) | `cluster_job_missing` |
+| Campaign Job-terminal rollup | Orchestrator | Campaign `completed` / `partial_failed` / `failed` when all items terminal; one `user_notifications` digest |
 | Gateway user cancellation | Future | — |
 
 ### 6.5 Reconciliation and drift
@@ -243,9 +245,9 @@ Exact reconciler frequency is an operational concern (e.g. every few minutes for
 
 ### 6.6 Query access
 
-- **Query service** (read-only): reference HTTP implementation [`services/query/SPEC.md`](../query/SPEC.md). Use a **PostgreSQL read replica** DSN or a database role granted **`SELECT`** only on `submissions`, `submission_events`, and any views. Do **not** run migrations or writes from the query tier.
+- **Query service**: reference HTTP implementation [`services/query/SPEC.md`](../query/SPEC.md). Prefer a **PostgreSQL read replica** / **`SELECT`** role for submissions, events, and campaigns. Query may **`UPDATE`** `user_notifications.read_at` for inbox UX (writable engine path).
 - **gateway** may read from the same store (replica optional) instead of calling the Kubernetes API for list/detail.
-- **orchestrator** is the **only** writer for automated lifecycle fields to avoid split-brain (except admin tooling).
+- **orchestrator** is the **only** writer for automated lifecycle fields and notification inserts (except admin tooling).
 
 ---
 

@@ -15,5 +15,10 @@ def create_engine_from_url(url: str) -> Engine:
     return create_engine(url, **kwargs)
 
 
+def create_writable_engine_from_url(url: str) -> Engine:
+    """Writable engine for narrowly scoped mutations (e.g. notification read_at)."""
+    return create_engine(url, pool_pre_ping=True, future=True)
+
+
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False, autoflush=False, future=True)

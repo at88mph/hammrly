@@ -11,8 +11,9 @@ from kubernetes.client import V1Job
 from kubernetes.config import ConfigException
 
 from hammrly_orchestrator.config import Settings
-from hammrly_orchestrator.k8s.job_state import job_id_from_job, user_id_from_job
+from hammrly_orchestrator.k8s.job_state import job_id_from_job, map_job_to_submission_status, user_id_from_job
 from hammrly_orchestrator.k8s.labels import LABEL_JOB_ID, LABEL_SUBMISSION_ID, LABEL_USER_ID
+from hammrly_orchestrator.k8s.workload_error import resolve_workload_error
 from hammrly_orchestrator.persistence.repository import SubmissionRepository
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,35 @@ def _configure_k8s(settings: Settings) -> None:
             config.load_kube_config()
 
 
+def _apply_update(
+    repository: SubmissionRepository,
+    job: V1Job,
+    *,
+    deleted: bool,
+    core: Optional[client.CoreV1Api],
+    namespace: str,
+) -> None:
+    workload_error = None
+    if not deleted:
+        status, _ = map_job_to_submission_status(job)
+        if status == "failed" and core is not None:
+            workload_error = resolve_workload_error(job, core=core, namespace=namespace)
+    repository.apply_job_watch_update(
+        job,
+        deleted=deleted,
+        label_job_id=job_id_from_job(job),
+        label_user_id=user_id_from_job(job),
+        workload_error=workload_error,
+    )
+
+
 def sync_jobs_once(
     *,
     batch: client.BatchV1Api,
     namespace: str,
     label_selector: str,
     repository: SubmissionRepository,
+    core: Optional[client.CoreV1Api] = None,
 ) -> None:
     """LIST all matching Jobs and reconcile DB (startup / drift helper)."""
     try:
@@ -45,12 +69,7 @@ def sync_jobs_once(
     for job in resp.items or []:
         if not isinstance(job, V1Job):
             continue
-        repository.apply_job_watch_update(
-            job,
-            deleted=False,
-            label_job_id=job_id_from_job(job),
-            label_user_id=user_id_from_job(job),
-        )
+        _apply_update(repository, job, deleted=False, core=core, namespace=namespace)
 
 
 def run_job_watch_loop(
@@ -61,6 +80,7 @@ def run_job_watch_loop(
     """Blocking watch loop (intended for a background thread)."""
     _configure_k8s(settings)
     batch = client.BatchV1Api()
+    core = client.CoreV1Api()
     ns = settings.job_watch_namespace
     selector = settings.job_watch_label_selector
     timeout = settings.job_watch_timeout_seconds
@@ -70,7 +90,13 @@ def run_job_watch_loop(
         ns,
         selector,
     )
-    sync_jobs_once(batch=batch, namespace=ns, label_selector=selector, repository=repository)
+    sync_jobs_once(
+        batch=batch,
+        namespace=ns,
+        label_selector=selector,
+        repository=repository,
+        core=core,
+    )
 
     w = watch.Watch()
     while not stop_event.is_set():
@@ -106,12 +132,7 @@ def run_job_watch_loop(
                         )
                     continue
 
-                repository.apply_job_watch_update(
-                    obj,
-                    deleted=False,
-                    label_job_id=job_id_from_job(obj),
-                    label_user_id=user_id_from_job(obj),
-                )
+                _apply_update(repository, obj, deleted=False, core=core, namespace=ns)
         except Exception:
             logger.exception("Job watch stream failed; reconnecting after backoff")
             time.sleep(3)
