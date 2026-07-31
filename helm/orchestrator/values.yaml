@@ -58,6 +58,9 @@ session:
     notebook:
       ingress:
         pathTemplate: "/hammrly/sessions/notebook/{submission_id}/"
+    carta:
+      ingress:
+        pathTemplate: "/hammrly/sessions/carta/{submission_id}/"
 clusterId: "default"
 jobWatchEnabled: false
 jobWatchNamespace: ""

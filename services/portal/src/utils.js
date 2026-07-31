@@ -25,19 +25,28 @@ export function isTerminalStatus(status) {
 
 /**
  * @param {string[]} modes
- * @param {'all' | 'desktop' | 'notebook'} filter
- * @returns {'desktop' | 'notebook' | null}
+ * @param {'all' | 'desktop' | 'notebook' | 'carta'} filter
+ * @returns {'desktop' | 'notebook' | 'carta' | null}
  */
 export function deriveKindFromModes(modes, filter = "all") {
   const upper = (modes || []).map((m) => m.toUpperCase());
   const hasDesktop = upper.includes("DESKTOP");
   const hasNotebook = upper.includes("NOTEBOOK");
+  const hasCarta = upper.includes("CARTA");
   if (filter === "desktop" && hasDesktop) return "desktop";
   if (filter === "notebook" && hasNotebook) return "notebook";
-  if (hasDesktop && !hasNotebook) return "desktop";
-  if (hasNotebook && !hasDesktop) return "notebook";
-  if (hasDesktop && hasNotebook) return filter === "notebook" ? "notebook" : "desktop";
-  return null;
+  if (filter === "carta" && hasCarta) return "carta";
+  const present = [
+    hasDesktop && "desktop",
+    hasNotebook && "notebook",
+    hasCarta && "carta",
+  ].filter(Boolean);
+  if (present.length === 0) return null;
+  if (present.length === 1) return /** @type {'desktop' | 'notebook' | 'carta'} */ (present[0]);
+  // Multiple modes: prefer desktop, then notebook, then carta (filter already handled above).
+  if (hasDesktop) return "desktop";
+  if (hasNotebook) return "notebook";
+  return "carta";
 }
 
 /**
@@ -48,12 +57,13 @@ export function kindLabelFromModes(modes, filter = "all") {
   const kind = deriveKindFromModes(modes, filter);
   if (kind === "desktop") return "Desktop";
   if (kind === "notebook") return "Notebook";
+  if (kind === "carta") return "Carta";
   return "—";
 }
 
 /**
  * @param {import('../api/types.js').SoftwareSearchItem} item
- * @param {'all' | 'desktop' | 'notebook'} filter
+ * @param {'all' | 'desktop' | 'notebook' | 'carta'} filter
  */
 export function isInteractiveCatalogItem(item, filter) {
   const kind = deriveKindFromModes(item.supported_modes, filter);

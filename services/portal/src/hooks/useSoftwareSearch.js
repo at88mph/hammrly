@@ -6,7 +6,7 @@ import { isInteractiveCatalogItem } from "../utils.js";
 
 /**
  * @param {string} searchText
- * @param {'all' | 'desktop' | 'notebook'} kindFilter
+ * @param {'all' | 'desktop' | 'notebook' | 'carta'} kindFilter
  */
 export function useSoftwareSearch(searchText, kindFilter) {
   const userTerms = useMemo(

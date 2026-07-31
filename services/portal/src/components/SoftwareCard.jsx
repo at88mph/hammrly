@@ -6,7 +6,7 @@ import {
 } from "../utils.js";
 
 /**
- * @param {{ item: import('../api/types.js').SoftwareSearchItem, kindFilter: 'all' | 'desktop' | 'notebook', onSelect: () => void }} props
+ * @param {{ item: import('../api/types.js').SoftwareSearchItem, kindFilter: 'all' | 'desktop' | 'notebook' | 'carta', onSelect: () => void }} props
  */
 export function SoftwareCard({ item, kindFilter, onSelect }) {
   const kindLabel = kindLabelFromModes(item.supported_modes, kindFilter);

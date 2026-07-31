@@ -27,6 +27,8 @@ export function buildWorkload(kind, workload) {
     w.kind_options = { novnc: { port: 6080 }, ...(w.kind_options || {}) };
   } else if (kind === "notebook") {
     w.kind_options = { ...(w.kind_options || {}) };
+  } else if (kind === "carta") {
+    w.kind_options = { carta: { port: 9090 }, ...(w.kind_options || {}) };
   }
   return w;
 }

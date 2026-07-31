@@ -14,6 +14,7 @@ const KIND_FILTERS = [
   { id: "all", label: "All" },
   { id: "desktop", label: "Desktop" },
   { id: "notebook", label: "Notebook" },
+  { id: "carta", label: "Carta" },
 ];
 
 export function NewSessionPage() {
@@ -22,7 +23,9 @@ export function NewSessionPage() {
   const createSession = useCreateSession();
 
   const [step, setStep] = useState(/** @type {1 | 2} */ (1));
-  const [kindFilter, setKindFilter] = useState(/** @type {'all' | 'desktop' | 'notebook'} */ ("all"));
+  const [kindFilter, setKindFilter] = useState(
+    /** @type {'all' | 'desktop' | 'notebook' | 'carta'} */ ("all"),
+  );
   const [searchText, setSearchText] = useState("");
   const debouncedSearch = useDebouncedValue(searchText);
 
@@ -107,7 +110,9 @@ export function NewSessionPage() {
               <button
                 key={f.id}
                 type="button"
-                onClick={() => setKindFilter(/** @type {'all'|'desktop'|'notebook'} */ (f.id))}
+                onClick={() =>
+                  setKindFilter(/** @type {'all'|'desktop'|'notebook'|'carta'} */ (f.id))
+                }
                 className={
                   kindFilter === f.id
                     ? "rounded-full bg-portal-accent px-4 py-1.5 text-sm font-medium text-white"

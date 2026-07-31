@@ -55,9 +55,12 @@ orchestrator:
       desktop:
         ingress:
           pathTemplate: "/hammrly/sessions/desktop/{submission_id}/"
-      notebook:
-        ingress:
-          pathTemplate: "/hammrly/sessions/notebook/{submission_id}/"
+        notebook:
+          ingress:
+            pathTemplate: "/hammrly/sessions/notebook/{submission_id}/"
+        carta:
+          ingress:
+            pathTemplate: "/hammrly/sessions/carta/{submission_id}/"
   clusterId: "default"
   image:
     repository: registry.gitlab.com/djenkins.cadc/hammrly/orchestrator
