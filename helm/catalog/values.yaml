@@ -2,8 +2,8 @@ replicaCount: 1
 nameOverride: ""
 fullnameOverride: ""
 image:
-  repository: registry.gitlab.com/djenkins.cadc/hammrly/catalog
-  tag: "0.2.0"
+  repository: ghcr.io/at88mph/hammrly/catalog
+  tag: "v0.2.0"
   pullPolicy: IfNotPresent
 service:
   type: ClusterIP
