@@ -1,8 +1,8 @@
 # Release pipeline: build/push images to GHCR, bump Helm, publish charts as OCI.
 #
 # Triggers:
-#   - push a Git tag (e.g. v1.2.0), or
-#   - run workflow_dispatch and set release_tag (e.g. v1.2.0)
+#   - GitHub Release published (UI or API; tag may be 0.2.1 or v0.2.1), or
+#   - run workflow_dispatch and set release_tag (release must already exist)
 #
 # Images are published as:
 #   ghcr.io/<owner>/<repo>/{gateway,orchestrator,query,catalog,portal}:{tag,latest}
@@ -17,17 +17,17 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to build (e.g. v1.2.0). Must already exist."
+        description: "Existing release tag to build (e.g. 0.2.1 or v0.2.1)."
         required: true
         type: string
 
 concurrency:
-  group: release-${{ github.event.inputs.release_tag || github.ref_name }}
+  group: release-${{ github.event.release.tag_name || github.event.inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -53,6 +53,8 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             tag="${{ github.event.inputs.release_tag }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            tag="${{ github.event.release.tag_name }}"
           else
             tag="${{ github.ref_name }}"
           fi
@@ -327,11 +329,11 @@ jobs:
             git push origin "HEAD:${{ github.event.repository.default_branch }}"
           fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.resolve-tag.outputs.tag }}
-          name: ${{ needs.resolve-tag.outputs.tag }}
-          generate_release_notes: true
-          files: dist/charts/*.tgz
-          fail_on_unmatched_files: true
+      - name: Attach chart packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Upload only — do not create a release (avoids re-triggering this workflow).
+          gh release upload "${TAG}" dist/charts/*.tgz --clobber
