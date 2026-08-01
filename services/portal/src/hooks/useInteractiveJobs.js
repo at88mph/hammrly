@@ -8,7 +8,7 @@ export function useInteractiveJobs() {
   return useInfiniteQuery({
     queryKey: ["interactiveJobs"],
     queryFn: ({ pageParam = 0 }) =>
-      listInteractiveJobs({ limit: PAGE_SIZE, offset: pageParam }),
+      listInteractiveJobs({ limit: PAGE_SIZE, offset: pageParam, status: ["ready", "running", "pending", "submitted"] }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => {
       if (lastPage.items.length < lastPage.limit) return undefined;

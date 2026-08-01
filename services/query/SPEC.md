@@ -113,6 +113,7 @@ Returns workloads whose **`payload_summary->>'kind'`** is one of (**configurable
 
 **Query parameters**
 
+- **`status`** (optional, repeatable) — when set, only return jobs whose `status` is one of the given values (e.g. `?status=ready&status=running` to exclude stale `unknown` rows)
 - **`limit`** (default 50, max clamped by `HAMMRLY_LIST_MAX_LIMIT`)
 - **`offset`** (default 0)
 

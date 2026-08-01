@@ -55,6 +55,7 @@ def list_interactive_submissions(
     settings: Settings,
     principal: Principal,
     *,
+    status: Optional[list[str]] = None,
     limit: int,
     offset: int,
 ) -> list[Submission]:
@@ -66,6 +67,8 @@ def list_interactive_submissions(
         kind_expr.in_(kinds),
         Submission.payload_summary.isnot(None),
     )
+    if status:
+        stmt = stmt.where(Submission.status.in_(status))
     stmt = _scope_submissions(stmt, principal, settings)
     stmt = stmt.order_by(Submission.updated_at.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt).all())

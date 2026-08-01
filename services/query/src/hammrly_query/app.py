@@ -511,11 +511,14 @@ def list_my_interactive_jobs(
     settings: SettingsDep,
     principal: PrincipalDep,
     db: SessionDep,
+    status: Optional[list[str]] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> InteractiveJobListResponse:
     lim = min(limit, settings.list_max_limit)
-    rows = list_interactive_submissions(db, settings, principal, limit=lim, offset=offset)
+    rows = list_interactive_submissions(
+        db, settings, principal, status=status, limit=lim, offset=offset
+    )
     return InteractiveJobListResponse(
         items=[_to_interactive_item(r) for r in rows],
         limit=lim,

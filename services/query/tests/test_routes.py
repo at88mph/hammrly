@@ -85,11 +85,18 @@ def test_list_interactive_jobs() -> None:
                 "/v1/me/jobs/interactive",
                 headers={"Authorization": f"Bearer {token}"},
             )
+            filtered = client.get(
+                "/v1/me/jobs/interactive",
+                params=[("status", "ready"), ("status", "running")],
+                headers={"Authorization": f"Bearer {token}"},
+            )
         assert r.status_code == 200, r.text
         data = r.json()
         assert len(data["items"]) == 1
         assert data["items"][0]["kind"] == "desktop"
         assert data["items"][0]["access_url"] == "https://sessions.example/hammrly/sessions/x/"
+        assert filtered.status_code == 200, filtered.text
+        assert len(filtered.json()["items"]) == 1
     finally:
         app.dependency_overrides.clear()
 
