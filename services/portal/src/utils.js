@@ -8,6 +8,9 @@ const IN_FLIGHT = new Set([
   "queued",
 ]);
 
+/** Statuses shown on the Home interactive-session list (excludes unknown/failed/etc.). */
+export const INTERACTIVE_LIST_STATUSES = ["ready", ...IN_FLIGHT];
+
 /** Lifecycle phases for the job status stepper (interactive + headless). */
 export const JOB_PHASES = [
   "received",

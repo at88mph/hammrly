@@ -6,13 +6,21 @@ function queryBase() {
 }
 
 /**
- * @param {{ limit?: number, offset?: number }} [params]
+ * @param {{ limit?: number, offset?: number, status?: string[] }} [params]
  * @returns {Promise<import('./types.js').InteractiveJobListResponse>}
  */
 export async function listInteractiveJobs(params = {}) {
-  const { limit = 50, offset = 0 } = params;
-  const url = `${queryBase()}/v1/me/jobs/interactive?limit=${limit}&offset=${offset}`;
-  const res = await apiFetch(url);
+  const { limit = 50, offset = 0, status } = params;
+  const qs = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (status?.length) {
+    for (const value of status) {
+      qs.append("status", value);
+    }
+  }
+  const res = await apiFetch(`${queryBase()}/v1/me/jobs/interactive?${qs.toString()}`);
   return /** @type {Promise<import('./types.js').InteractiveJobListResponse>} */ (
     parseJsonResponse(res)
   );
