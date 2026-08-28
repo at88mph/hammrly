@@ -3,7 +3,7 @@ nameOverride: ""
 fullnameOverride: ""
 image:
   repository: ghcr.io/at88mph/hammrly/catalog
-  tag: "v0.3.0"
+  tag: "v0.4.0"
   pullPolicy: IfNotPresent
 service:
   type: ClusterIP

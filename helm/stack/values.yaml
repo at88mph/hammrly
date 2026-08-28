@@ -19,7 +19,7 @@ gateway:
     requiredScopes: "hammrly:jobs:submit"
   image:
     repository: ghcr.io/at88mph/hammrly/gateway
-    tag: v0.3.0
+    tag: v0.4.0
 orchestrator:
   redisUrl: "redis://redis:6379/0"
   ephemeralStorage:
@@ -64,7 +64,7 @@ orchestrator:
   clusterId: "default"
   image:
     repository: ghcr.io/at88mph/hammrly/orchestrator
-    tag: v0.3.0
+    tag: v0.4.0
 query:
   redisUrl: "redis://redis:6379/0"
   database:
@@ -82,7 +82,7 @@ query:
   clusterId: "default"
   image:
     repository: ghcr.io/at88mph/hammrly/query
-    tag: v0.3.0
+    tag: v0.4.0
 catalog:
   tap:
     syncUrl: "https://example.tap.host/tap/sync"
@@ -94,7 +94,7 @@ catalog:
     requiredScopes: "hammrly:catalog:read"
   image:
     repository: ghcr.io/at88mph/hammrly/catalog
-    tag: v0.3.0
+    tag: v0.4.0
 portal:
   config:
     queryBaseUrl: "https://sessions.example.com/hammrly/query"
@@ -106,4 +106,4 @@ portal:
     oidcProviders: []
   image:
     repository: ghcr.io/at88mph/hammrly/portal
-    tag: v0.3.0
+    tag: v0.4.0
