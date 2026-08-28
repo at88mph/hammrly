@@ -31,7 +31,7 @@ services:
       retries: 5
 
   # migrate:
-  #   image: ghcr.io/at88mph/hammrly-orchestrator:v0.3.0
+  #   image: ghcr.io/at88mph/hammrly-orchestrator:v0.4.0
   #   environment:
   #     HAMMRLY_DATABASE_URL: postgresql+psycopg2://hammrly:hammrly@postgres:5432/hammrly
   #   command: ["alembic", "upgrade", "head"]
@@ -41,7 +41,7 @@ services:
   #   restart: "no"
 
   gateway:
-    image: ghcr.io/at88mph/hammrly/gateway:v0.3.0
+    image: ghcr.io/at88mph/hammrly/gateway:v0.4.0
     ports:
       - "8080:8080"
     environment:
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
 
   orchestrator:
-    image: ghcr.io/at88mph/hammrly/orchestrator:v0.3.0
+    image: ghcr.io/at88mph/hammrly/orchestrator:v0.4.0
     environment:
       HAMMRLY_REDIS_URL: redis://redis:6379/0
       HAMMRLY_DATABASE_URL: postgresql+psycopg2://hammrly:hammrly@postgres:5432/hammrly
@@ -68,7 +68,7 @@ services:
         condition: service_healthy
 
   query:
-    image: ghcr.io/at88mph/hammrly-query:v0.3.0
+    image: ghcr.io/at88mph/hammrly-query:v0.4.0
     ports:
       - "8081:8081"
     environment:
