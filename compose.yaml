@@ -41,7 +41,7 @@ services:
   #   restart: "no"
 
   gateway:
-    image: registry.gitlab.com/djenkins.cadc/hammrly/gateway:0.1.0-rc.16
+    image: ghcr.io/at88mph/hammrly/gateway:v0.3.0
     ports:
       - "8080:8080"
     environment:
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
 
   orchestrator:
-    image: registry.gitlab.com/djenkins.cadc/hammrly/orchestrator:0.1.0-rc.16
+    image: ghcr.io/at88mph/hammrly/orchestrator:v0.3.0
     environment:
       HAMMRLY_REDIS_URL: redis://redis:6379/0
       HAMMRLY_DATABASE_URL: postgresql+psycopg2://hammrly:hammrly@postgres:5432/hammrly
