@@ -1,18 +1,18 @@
 dependencies:
 - name: hammrly-gateway
   repository: file://../gateway
-  version: 0.4.0
+  version: 0.4.1
 - name: hammrly-orchestrator
   repository: file://../orchestrator
-  version: 0.4.0
+  version: 0.4.1
 - name: hammrly-query
   repository: file://../query
-  version: 0.4.0
+  version: 0.4.1
 - name: hammrly-catalog
   repository: file://../catalog
-  version: 0.4.0
+  version: 0.4.1
 - name: hammrly-portal
   repository: file://../portal
-  version: 0.4.0
-digest: sha256:53d91c91e2bf6783b573570d583736771a27c0848eedafecaf80fe81b497f350
-generated: "2026-08-28T17:18:05.939512151Z"
+  version: 0.4.1
+digest: sha256:3f5d784d418cd12bafa020b86128392b0f7b0a55d96660836f8ad18ecf1369ae
+generated: "2026-08-28T22:26:31.183876293Z"

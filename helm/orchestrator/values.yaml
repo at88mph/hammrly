@@ -3,7 +3,7 @@ nameOverride: ""
 fullnameOverride: ""
 image:
   repository: ghcr.io/at88mph/hammrly/orchestrator
-  tag: "v0.4.0"
+  tag: "0.4.1"
   pullPolicy: IfNotPresent
 serviceAccount:
   create: true
