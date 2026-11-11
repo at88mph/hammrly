@@ -41,6 +41,7 @@ def run_drift_reconcile_once(
     """LIST Jobs; mark DB rows unknown if a terminal-ish row no longer has a cluster Job."""
     _configure_k8s(settings)
     batch = client.BatchV1Api()
+    custom = client.CustomObjectsApi()
     ns = settings.job_watch_namespace
     selector = settings.job_watch_label_selector
 
@@ -55,12 +56,35 @@ def run_drift_reconcile_once(
         meta = job.metadata
         if not meta or not meta.labels:
             continue
+        if meta.labels.get("hammrly.io/campaign-jobset") == "indexed":
+            continue
         sid = meta.labels.get(LABEL_SUBMISSION_ID)
         if sid:
             in_cluster.add(sid)
 
+    jobset_campaigns: Set[str] = set()
+    try:
+        js_resp = custom.list_namespaced_custom_object(
+            group=settings.jobset_api_group,
+            version=settings.jobset_api_version,
+            namespace=ns,
+            plural=settings.jobset_plural,
+            label_selector=settings.job_watch_label_selector,
+        )
+        for item in js_resp.get("items") or []:
+            meta = item.get("metadata") or {}
+            labels = meta.get("labels") or {}
+            cid = labels.get("hammrly.io/campaign-id")
+            if cid:
+                jobset_campaigns.add(str(cid))
+    except Exception:
+        logger.exception("drift: list JobSet failed")
+
     active_ids = repository.list_active_submission_ids(_ACTIVE_DRIFT_STATUSES)
     for sid in active_ids:
+        camp_id = repository.campaign_id_for_submission(sid)
+        if camp_id and camp_id in jobset_campaigns:
+            continue
         if sid not in in_cluster:
             repository.mark_cluster_job_missing(
                 sid,

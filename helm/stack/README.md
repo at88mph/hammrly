@@ -75,6 +75,8 @@ Example install flags (shared Secret; often the same DB host and credentials as 
 - Helm 3.14+
 - Images built from the repo (see Dockerfiles under each service).
 - **Orchestrator** `k8sWorkloadNamespace` is the namespace where user Jobs/Services/Ingresses are created. Defaults to the release namespace. RBAC `Role`/`RoleBinding` are created in that namespace; the workload `ServiceAccount` lives in the release namespace (cross-namespace binding when the two differ).
+- **Kueue** (required): workqueue for interactive Jobs and campaign JobSets.
+- **JobSet controller** (required): headless campaigns materialize as one JobSet per submit; install [JobSet](https://jobset.sigs.k8s.io/) with Kueue integration. Orchestrator sets `kueue.x-k8s.io/queue-name` on JobSet metadata. Size ClusterQueue quota for indexed parallelism × pod resource requests (init + workload + sidecar).
 
 ## Build images
 

@@ -190,6 +190,8 @@ Every orchestrated Job mounts a per-pod `emptyDir` at `/workspace` and shares it
 
 The default helper image currently supports `http`, `https`, `file`, and local-path inputs, and `http`/`https` PUT or file/local-path output destinations. Use pre-signed URLs for object stores unless the deployment provides a custom helper image.
 
+**Campaign batches:** the same staging rules apply per item via [`job-campaign` input declaration](../../job-campaign/v1/VALIDATION.md#input-declaration). Interactive `POST /v2/session` may set optional `workload.input_uri` on a single job.
+
 ## Resources
 
 | Rule | Detail |

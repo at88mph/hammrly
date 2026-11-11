@@ -83,6 +83,10 @@ def cross_validate_campaign_submit(
                 f"inline items count {len(items)} exceeds maximum {max_inline_items}; use manifest_uri"
             )
         seen: set[str] = set()
+        template = body.get("template")
+        template_input = ""
+        if isinstance(template, dict):
+            template_input = str(template.get("input_uri") or "").strip()
         for it in items:
             if not isinstance(it, dict):
                 raise ValueError("each item must be an object")
@@ -92,6 +96,32 @@ def cross_validate_campaign_submit(
             if key in seen:
                 raise ValueError(f"duplicate item_key: {key}")
             seen.add(key)
+            item_input = str(it.get("input_uri") or "").strip()
+            if not item_input and not template_input:
+                raise ValueError(f"item {key!r} requires input_uri (or set template.input_uri)")
+            nbytes = it.get("input_bytes")
+            if nbytes is not None:
+                try:
+                    nbytes_i = int(nbytes)
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"item {key!r} input_bytes must be an integer") from e
+                if nbytes_i < 1:
+                    raise ValueError(f"item {key!r} input_bytes must be positive")
+                if isinstance(template, dict):
+                    resources = template.get("resources")
+                    if isinstance(resources, dict):
+                        es = str(resources.get("ephemeral_storage") or "").strip()
+                        if es:
+                            try:
+                                es_gb = int(es.rstrip("gGbB") or "0")
+                            except ValueError:
+                                es_gb = 0
+                            need_gb = max(1, (nbytes_i + (1 << 30) - 1) // (1 << 30))
+                            if es_gb < need_gb:
+                                raise ValueError(
+                                    f"item {key!r} input_bytes requires template.resources."
+                                    f"ephemeral_storage >= {need_gb}G"
+                                )
 
     # Validate template as workload for job-submission rules
     fake_envelope = {

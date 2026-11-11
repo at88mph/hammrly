@@ -9,7 +9,7 @@ description: Guides Hammrly's Kueue workload admission integration—suspended b
 
 **Kubernetes object construction** (Job suspend, pod resources, labels on `V1Job`): follow the [`kubernetes-development`](../kubernetes-development/SKILL.md) skill — do not duplicate that guidance here.
 
-**Authoritative app behavior:** [`services/orchestrator/SPEC.md`](../../../services/orchestrator/SPEC.md) §5.1–5.3, [`contracts/job-submission/v1/VALIDATION.md`](../../../contracts/job-submission/v1/VALIDATION.md) (Kueue + resources), [`contracts/job-campaign/v1/README.md`](../../../contracts/job-campaign/v1/README.md) (no JobSet).
+**Authoritative app behavior:** [`services/orchestrator/SPEC.md`](../../../services/orchestrator/SPEC.md) §5.1–5.3, [`contracts/job-submission/v1/VALIDATION.md`](../../../contracts/job-submission/v1/VALIDATION.md) (Kueue + resources), [`contracts/job-campaign/v1/README.md`](../../../contracts/job-campaign/v1/README.md) (campaign JobSets).
 
 ## Deployed Kueue version (not in this repo)
 
@@ -42,7 +42,7 @@ Envelope → KubernetesSubmitter → suspended Job (+ labels)
                                Pods run → job_watch / pod_watch → PostgreSQL status
 ```
 
-**JobSet:** **out of scope.** Campaigns and parallel headless work use **N independent `batch/v1` Job** objects, each with its own queue label ([`job-campaign` README](../../../contracts/job-campaign/v1/README.md)).
+**Campaigns (JobSet):** each campaign is one **JobSet** with `kueue.x-k8s.io/queue-name` on **JobSet metadata** (not on the indexed pod template). Interactive sessions remain plain **`batch/v1` Job** objects ([`job-campaign` README](../../../contracts/job-campaign/v1/README.md)).
 
 ## Application integration (current)
 
@@ -152,7 +152,7 @@ End-to-end admission (LocalQueue backlog, preemption, flavor fit) belongs in **c
 
 1. **Do not unsuspend Jobs** in orchestrator except if SPEC explicitly changes steady-state semantics.
 2. **Do not expose LocalQueue choice in the public submit contract** without a product decision; keep routing in deployer config.
-3. **Keep JobSet out of scope** unless SPEC and campaign contracts change.
+3. **Campaigns:** queue label on JobSet metadata; watch indexed pods for per-item DB status.
 4. **Match ClusterQueue capacity** to fixed request=limit pod templates when documenting sizing for users.
 5. **Split concerns:** Kueue policy changes → ops/docs; label/suspend/resources → orchestrator + `kubernetes-development`.
 

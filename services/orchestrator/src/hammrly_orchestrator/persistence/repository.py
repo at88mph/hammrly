@@ -109,6 +109,7 @@ class SubmissionRepository:
         redis_message_id: Optional[str] = None,
         campaign_id: Optional[str] = None,
         item_key: Optional[str] = None,
+        completion_index: Optional[int] = None,
     ) -> None:
         workload = envelope["workload"]
         now = datetime.now(timezone.utc)
@@ -142,6 +143,7 @@ class SubmissionRepository:
                     payload_summary=summary,
                     campaign_id=campaign_id,
                     item_key=item_key,
+                    completion_index=completion_index,
                     created_at=now,
                     updated_at=now,
                 )
@@ -378,6 +380,11 @@ class SubmissionRepository:
             stmt = select(Submission.submission_id).where(Submission.status.in_(statuses))
             return list(session.scalars(stmt).all())
 
+    def campaign_id_for_submission(self, submission_id: str) -> Optional[str]:
+        with self._session() as session:
+            row = session.get(Submission, submission_id)
+            return str(row.campaign_id) if row and row.campaign_id else None
+
     def _rollup_submission_status_in_session(
         self,
         session: Session,
@@ -548,6 +555,221 @@ class SubmissionRepository:
         with self._session() as session:
             stmt = select(Submission.submission_id).where(Submission.campaign_id == campaign_id)
             return len(list(session.scalars(stmt).all()))
+
+    def campaign_has_jobset(self, campaign_id: str) -> bool:
+        with self._session() as session:
+            row = session.get(Campaign, campaign_id)
+            return bool(row and row.k8s_jobset_name)
+
+    def mark_campaign_jobset_created(
+        self,
+        campaign_id: str,
+        *,
+        jobset_name: str,
+        jobset_uid: str,
+        configmap_name: str,
+        namespace: str,
+        resource_version: Optional[str],
+        queue_name: str,
+        child_job_name: str,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        with self._session() as session:
+            camp = session.get(Campaign, campaign_id)
+            if camp is None:
+                return
+            camp.k8s_jobset_name = jobset_name
+            camp.k8s_jobset_uid = jobset_uid
+            camp.items_configmap_name = configmap_name
+            self._touch(now, camp)
+
+            stmt = select(Submission).where(Submission.campaign_id == campaign_id)
+            for row in session.scalars(stmt).all():
+                old_status = row.status
+                row.status = "submitted_to_cluster"
+                row.status_detail = None
+                row.k8s_job_name = child_job_name
+                row.k8s_namespace = namespace
+                row.k8s_job_uid = jobset_uid
+                row.k8s_resource_version = resource_version
+                row.queue_name = queue_name
+                self._touch(now, row)
+                self._add_event(
+                    session,
+                    row.submission_id,
+                    "k8s_jobset_create_ok",
+                    {
+                        "jobset_name": jobset_name,
+                        "namespace": namespace,
+                        "uid": jobset_uid,
+                        "rv": resource_version,
+                    },
+                )
+                if old_status != "submitted_to_cluster":
+                    self._rollup_submission_status_in_session(
+                        session,
+                        campaign_id,
+                        old_status=old_status,
+                        new_status="submitted_to_cluster",
+                    )
+
+    def mark_campaign_jobset_create_failed(self, campaign_id: str, detail: str) -> None:
+        now = datetime.now(timezone.utc)
+        with self._session() as session:
+            camp = session.get(Campaign, campaign_id)
+            if camp is None:
+                return
+            camp.status = "failed"
+            self._touch(now, camp)
+            stmt = select(Submission).where(Submission.campaign_id == campaign_id)
+            for row in session.scalars(stmt).all():
+                if row.status in TERMINAL_SUBMISSION_STATUSES:
+                    continue
+                old = row.status
+                row.status = "failed"
+                row.status_detail = detail[:2000]
+                self._touch(now, row)
+                self._add_event(
+                    session,
+                    row.submission_id,
+                    "k8s_jobset_create_err",
+                    {"error": detail[:4000]},
+                )
+                if old != "failed":
+                    self._rollup_submission_status_in_session(
+                        session, campaign_id, old_status=old, new_status="failed"
+                    )
+            self._maybe_finalize_campaign_terminal(session, campaign_id)
+
+    def list_campaign_manifest_entries(self, campaign_id: str) -> list[dict[str, Any]]:
+        """Submissions for JobSet resume, ordered by completion_index."""
+        with self._session() as session:
+            rows = session.scalars(
+                select(Submission)
+                .where(Submission.campaign_id == campaign_id)
+                .order_by(Submission.completion_index.asc().nulls_last(), Submission.created_at.asc())
+            ).all()
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if row.completion_index is None or not row.item_key:
+                    continue
+                out.append(
+                    {
+                        "completion_index": int(row.completion_index),
+                        "item": {"item_key": row.item_key},
+                        "submission_id": row.submission_id,
+                        "job_id": row.job_id,
+                    }
+                )
+            return out
+
+    def submission_id_for_campaign_index(self, campaign_id: str, completion_index: int) -> Optional[str]:
+        with self._session() as session:
+            stmt = select(Submission.submission_id).where(
+                Submission.campaign_id == campaign_id,
+                Submission.completion_index == completion_index,
+            )
+            return session.scalar(stmt)
+
+    def apply_campaign_indexed_pod_status(
+        self,
+        *,
+        campaign_id: str,
+        completion_index: int,
+        new_status: str,
+        status_detail: Optional[str] = None,
+    ) -> None:
+        sid = self.submission_id_for_campaign_index(campaign_id, completion_index)
+        if not sid:
+            logger.debug(
+                "indexed pod status: no submission campaign_id=%s index=%s",
+                campaign_id,
+                completion_index,
+            )
+            return
+        now = datetime.now(timezone.utc)
+        with self._session() as session:
+            row = session.get(Submission, sid)
+            if row is None:
+                return
+            if row.status == new_status and (status_detail or None) == (row.status_detail or None):
+                return
+            if row.status in TERMINAL_SUBMISSION_STATUSES and new_status not in TERMINAL_SUBMISSION_STATUSES:
+                return
+            old_status = row.status
+            row.status = new_status
+            row.status_detail = status_detail
+            self._touch(now, row)
+            self._add_event(
+                session,
+                sid,
+                f"indexed_pod_{new_status}",
+                {"completion_index": completion_index},
+            )
+            if row.campaign_id and old_status != new_status:
+                self._rollup_submission_status_in_session(
+                    session, row.campaign_id, old_status=old_status, new_status=new_status
+                )
+                self._maybe_finalize_campaign_terminal(session, row.campaign_id)
+
+    def apply_campaign_indexed_job_watch(
+        self,
+        job: Any,
+        *,
+        deleted: bool = False,
+    ) -> None:
+        from kubernetes.client import V1Job
+
+        from hammrly_orchestrator.k8s.labels import (
+            LABEL_CAMPAIGN_ID,
+            LABEL_CAMPAIGN_JOBSET,
+            VALUE_CAMPAIGN_JOBSET_INDEXED,
+        )
+
+        if not isinstance(job, V1Job):
+            return
+        labels = (job.metadata.labels or {}) if job.metadata else {}
+        campaign_id = labels.get(LABEL_CAMPAIGN_ID)
+        if not campaign_id or labels.get(LABEL_CAMPAIGN_JOBSET) != VALUE_CAMPAIGN_JOBSET_INDEXED:
+            return
+        if labels.get(LABEL_SUBMISSION_ID):
+            return
+
+        if deleted:
+            stmt_cids: list[str] = []
+            with self._session() as session:
+                rows = session.scalars(
+                    select(Submission.submission_id).where(
+                        Submission.campaign_id == campaign_id,
+                        Submission.status.notin_(tuple(TERMINAL_SUBMISSION_STATUSES)),
+                    )
+                ).all()
+                stmt_cids = list(rows)
+            for sid in stmt_cids:
+                self.mark_cluster_job_missing(sid, reason="indexed campaign Job deleted in cluster")
+            return
+
+        new_status, detail = map_job_to_submission_status(job)
+        if new_status not in ("admitted", "submitted_to_cluster"):
+            return
+        now = datetime.now(timezone.utc)
+        with self._session() as session:
+            for row in session.scalars(
+                select(Submission).where(
+                    Submission.campaign_id == campaign_id,
+                    Submission.status == "submitted_to_cluster",
+                )
+            ).all():
+                if new_status == row.status:
+                    continue
+                old_status = row.status
+                row.status = new_status
+                row.status_detail = detail
+                self._touch(now, row)
+                self._add_event(session, row.submission_id, f"watch_{new_status}", {"bulk": True})
+                self._rollup_submission_status_in_session(
+                    session, campaign_id, old_status=old_status, new_status=new_status
+                )
 
     def submission_exists_for_campaign_item(self, campaign_id: str, item_key: str) -> bool:
         with self._session() as session:

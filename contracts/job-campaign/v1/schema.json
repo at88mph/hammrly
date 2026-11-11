@@ -37,7 +37,7 @@
     },
     "CampaignItem": {
       "type": "object",
-      "required": ["item_key", "input_uri"],
+      "required": ["item_key"],
       "properties": {
         "item_key": {
           "type": "string",
@@ -46,6 +46,7 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
         },
         "input_uri": { "type": "string", "minLength": 1 },
+        "input_bytes": { "type": "integer", "minimum": 1 },
         "output_uri": { "type": "string", "minLength": 1 },
         "name": { "type": "string", "minLength": 1, "maxLength": 253 },
         "batch_args": {

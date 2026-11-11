@@ -11,6 +11,8 @@ from hammrly_orchestrator.config import Settings
 from hammrly_orchestrator.k8s import KubernetesSubmitter
 from hammrly_orchestrator.k8s.drift_reconcile import start_drift_background
 from hammrly_orchestrator.k8s.job_watch import start_job_watch_background
+from hammrly_orchestrator.k8s.campaign_pod_watch import start_campaign_pod_watch_background
+from hammrly_orchestrator.k8s.jobset_submitter import JobSetSubmitter
 from hammrly_orchestrator.k8s.pod_watch import start_pod_watch_background
 from hammrly_orchestrator.campaign.expander import CampaignExpander
 from hammrly_orchestrator.campaign_listener import CampaignQueueListener
@@ -34,8 +36,10 @@ def main() -> None:
     repository = SubmissionRepository(create_session_factory(engine))
 
     submitter: Optional[KubernetesSubmitter] = None
+    jobset_submitter: Optional[JobSetSubmitter] = None
     if settings.k8s_submit_enabled:
         submitter = KubernetesSubmitter(settings)
+        jobset_submitter = JobSetSubmitter(settings)
 
     shutdown = threading.Event()
 
@@ -48,6 +52,7 @@ def main() -> None:
 
     start_job_watch_background(settings, repository, shutdown)
     start_pod_watch_background(settings, repository, shutdown)
+    start_campaign_pod_watch_background(settings, repository, shutdown)
     start_drift_background(settings, repository, shutdown)
 
     def on_envelope(envelope: dict[str, Any], message_id: str) -> None:
@@ -115,7 +120,7 @@ def main() -> None:
                     repository.mark_k8s_create_failed(submission_id, str(e))
                 raise
 
-    expander = CampaignExpander(settings, repository, submitter)
+    expander = CampaignExpander(settings, repository, jobset_submitter)
 
     def on_campaign(envelope: dict[str, Any], message_id: str) -> None:
         logger.info(

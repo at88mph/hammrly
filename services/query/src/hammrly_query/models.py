@@ -29,6 +29,9 @@ class Campaign(Base):
     manifest_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     manifest_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     cluster_id: Mapped[str] = mapped_column(String(128), nullable=False, default="default")
+    k8s_jobset_name: Mapped[Optional[str]] = mapped_column(String(253), nullable=True)
+    k8s_jobset_uid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    items_configmap_name: Mapped[Optional[str]] = mapped_column(String(253), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -71,6 +74,7 @@ class Submission(Base):
     payload_summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     campaign_id: Mapped[Optional[str]] = mapped_column(String(36), index=True, nullable=True)
     item_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    completion_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     events: Mapped[list["SubmissionEvent"]] = relationship(
         "SubmissionEvent",

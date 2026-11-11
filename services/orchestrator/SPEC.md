@@ -143,13 +143,15 @@ Wire layout for **`XADD` / `XREADGROUP`** is defined in [`contracts/job-submissi
 ### 5.2 Headless campaigns
 
 - Gateway publishes **`CampaignExpansionEnvelope`** to **`hammrly:campaign-submissions`** ([`contracts/job-campaign/v1/`](../../contracts/job-campaign/v1/)).
-- Orchestrator **campaign expander** inserts `campaigns`, then one **`submissions` row + suspended Job** per item (label `hammrly.io/campaign-id`).
+- Orchestrator **campaign expander** inserts `campaigns`, then one **`submissions` row per item** (`completion_index`, `hammrly.io/campaign-id` on cluster objects).
+- Cluster materialization: one suspended **`JobSet`** per campaign (indexed child Job, items ConfigMap); per-item status from pod completion index watch.
 - Large campaigns use **`manifest_uri`** (JSONL); inline **`items`** capped by `HAMMRLY_CAMPAIGN_MAX_INLINE_ITEMS` on gateway.
+- **Requires** Kueue and the JobSet controller ([`contracts/job-campaign/v1/README.md`](../../contracts/job-campaign/v1/README.md)).
 
 ### 5.3 Kueue
 
 - Orchestrator **does not** unsuspend Jobs manually in the steady state; **Kueue** admits work per `LocalQueue` / `ClusterQueue` configuration.
-- **JobSet is out of scope:** embarrassingly parallel headless work uses **N plain `batch/v1` Job** objects, not JobSet CRDs.
+- **Campaigns:** Kueue admits the **JobSet**; `kueue.x-k8s.io/queue-name` is set on **JobSet** metadata (headless queue from orchestrator config). Interactive sessions use plain `batch/v1` Jobs with the queue label on each Job.
 - Orchestrator MUST ensure each Job is **eligible** for Kueue:
   - Correct labels / resource requests / queue affinity as defined in platform policy.
   - Optional: create or reference the Kueue **`Workload`** object if the deployment uses explicit Workload objects versus plain Job integration — **this must match the cluster’s Kueue version and config**.

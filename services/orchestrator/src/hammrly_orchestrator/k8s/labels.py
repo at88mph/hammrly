@@ -11,6 +11,9 @@ LABEL_TENANT_ID = "hammrly.io/tenant-id"
 LABEL_USER_ID = "hammrly.io/user-id"
 LABEL_WORKLOAD_KIND = "hammrly.io/workload-kind"
 LABEL_CAMPAIGN_ID = "hammrly.io/campaign-id"
+LABEL_CAMPAIGN_JOBSET = "hammrly.io/campaign-jobset"
+VALUE_CAMPAIGN_JOBSET_INDEXED = "indexed"
+LABEL_ITEM_KEY = "hammrly.io/item-key"
 KUEUE_LOCAL_QUEUE_LABEL = "kueue.x-k8s.io/queue-name"
 
 LABEL_MANAGED_BY = "hammrly.io/managed-by"
@@ -47,6 +50,43 @@ def normalize_job_id_label_value(job_id: str) -> str:
     digest = hashlib.sha256(trimmed.encode("utf-8")).hexdigest()[:32]
     candidate = f"j-{digest}"
     return candidate[:_LABEL_VALUE_MAX_LEN]
+
+
+def resource_names_from_campaign(campaign_id: str) -> tuple[str, str, str]:
+    """Derive JobSet name and items ConfigMap name from campaign UUID."""
+    compact = campaign_id.replace("-", "").lower()
+    if len(compact) != 32:
+        digest = hashlib.sha256(campaign_id.encode("utf-8")).hexdigest()[:24]
+        compact = digest
+    base = f"js{compact}"
+    jobset_name = base[:63]
+    cm_name = f"{jobset_name}-items"[:63]
+    return jobset_name, cm_name, jobset_name
+
+
+def base_labels_for_campaign_jobset(
+    envelope: dict[str, Any],
+    *,
+    kueue_queue_name: str,
+    user_id_label_value: str,
+) -> dict[str, str]:
+    campaign_id = str(envelope["campaign_id"]).strip()
+    template = envelope["template"]
+    labels: dict[str, str] = {
+        LABEL_MANAGED_BY: VALUE_MANAGED_BY_ORCHESTRATOR,
+        LABEL_TENANT_ID: envelope["tenant_id"],
+        LABEL_USER_ID: user_id_label_value,
+        LABEL_WORKLOAD_KIND: str(template.get("kind") or "headless"),
+        LABEL_CAMPAIGN_ID: campaign_id,
+        LABEL_CAMPAIGN_JOBSET: VALUE_CAMPAIGN_JOBSET_INDEXED,
+        KUEUE_LOCAL_QUEUE_LABEL: kueue_queue_name,
+    }
+    extra = template.get("labels")
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if isinstance(k, str) and isinstance(v, str):
+                labels[k] = v
+    return labels
 
 
 def resource_names_from_submission(submission_id: str) -> tuple[str, str, str]:

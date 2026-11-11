@@ -80,7 +80,7 @@ PostgreSQL is **required**: the orchestrator writes submission lifecycle rows to
 | `HAMMRLY_CAMPAIGN_STREAM_KEY` | `hammrly:campaign-submissions` | Redis stream for headless campaign expansion |
 | `HAMMRLY_CAMPAIGN_MAX_ITEMS` | `100000` | Max items per campaign after manifest expand |
 | `HAMMRLY_CAMPAIGN_EXPAND_CHUNK_SIZE` | `500` | Items processed per expansion batch |
-| `HAMMRLY_CAMPAIGN_EXPAND_RPS` | `10` | Max K8s Job creates/sec during expansion (`0` = unlimited) |
+| `HAMMRLY_CAMPAIGN_EXPAND_RPS` | `10` | Legacy setting (campaigns create one JobSet; not used for per-item Job pacing) |
 | `HAMMRLY_JOB_WATCH_ENABLED` | `false` | When `true`, run a `batch/v1` Job watch in a background thread |
 | `HAMMRLY_JOB_WATCH_NAMESPACE` | _(same as `HAMMRLY_K8S_NAMESPACE`)_ | Namespace for the watch `list_namespaced_job` call |
 | `HAMMRLY_JOB_LABEL_SELECTOR` | (see config) | Label selector for managed Jobs; default includes `hammrly.io/managed-by=orchestrator` |

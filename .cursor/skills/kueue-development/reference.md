@@ -68,7 +68,7 @@ Hammrly will **not** surface full Kueue admission reason strings in DB unless ex
 - [ ] After admission, Job `spec.suspend` becomes `false` and DB reaches `admitted` → `running`
 - [ ] Over-quota submit stays suspended; Kueue reports inadmissible (document expected UX)
 - [ ] GPU headless/desktop requests fit a flavor with available `nvidia.com/gpu` quota
-- [ ] Campaign N Jobs each admitted independently (no JobSet)
+- [ ] Campaign JobSet carries `kueue.x-k8s.io/queue-name` on JobSet metadata
 
 ## Related skills and docs
 

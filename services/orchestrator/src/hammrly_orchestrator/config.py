@@ -62,6 +62,18 @@ class Settings(BaseSettings):
         ge=0.0,
         description="Max Kubernetes Job creates per second during campaign expansion; 0 = unlimited.",
     )
+    jobset_api_group: str = Field(default="jobset.x-k8s.io")
+    jobset_api_version: str = Field(default="v1alpha2")
+    jobset_plural: str = Field(default="jobsets")
+    campaign_items_configmap_max_bytes: int = Field(
+        default=900_000,
+        ge=10_000,
+        description="Reject JobSet expansion when serialized items manifest exceeds this size.",
+    )
+    campaign_indexed_pod_watch_enabled: bool = Field(
+        default=True,
+        description="Watch indexed campaign pods for per-item submission status (JobSet campaigns).",
+    )
     redis_consumer_group: str = Field(
         default="orchestrator",
     )

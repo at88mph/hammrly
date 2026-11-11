@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from typing import Any, Optional
 
 from hammrly_orchestrator.campaign.manifest import load_campaign_items
 from hammrly_orchestrator.campaign.merge import build_job_envelope
 from hammrly_orchestrator.config import Settings
-from hammrly_orchestrator.k8s import KubernetesSubmitter
+from hammrly_orchestrator.k8s.jobset_submitter import JobSetSubmitter
 from hammrly_orchestrator.networking import normalize_workload_networking
 from hammrly_orchestrator.persistence.repository import SubmissionRepository
 
@@ -33,19 +32,29 @@ class CampaignExpander:
         self,
         settings: Settings,
         repository: SubmissionRepository,
-        submitter: Optional[KubernetesSubmitter],
+        jobset_submitter: Optional[JobSetSubmitter],
     ) -> None:
         self._settings = settings
         self._repository = repository
-        self._submitter = submitter
+        self._jobset_submitter = jobset_submitter
 
     def process(self, envelope: dict[str, Any], message_id: str) -> None:
         campaign_id = str(envelope["campaign_id"])
         self._repository.ensure_campaign(envelope, cluster_id=self._settings.cluster_id)
 
+        if self._repository.campaign_has_jobset(campaign_id):
+            logger.info("campaign_id=%s already has JobSet; skipping expand", campaign_id)
+            return
+
         existing = self._repository.count_campaign_submissions(campaign_id)
         if existing > 0:
-            logger.info("campaign_id=%s already has %s submissions; skipping expand", campaign_id, existing)
+            logger.info(
+                "campaign_id=%s resuming JobSet create (%s submissions, no JobSet yet)",
+                campaign_id,
+                existing,
+            )
+            self._resume_jobset(campaign_id, envelope)
+            self._repository.finalize_campaign_expansion(campaign_id)
             return
 
         items = _resolve_items(envelope, self._settings)
@@ -54,84 +63,110 @@ class CampaignExpander:
             raise ValueError(f"campaign item count {len(items)} exceeds maximum {max_items}")
 
         self._repository.mark_campaign_expanding(campaign_id, item_count=len(items))
-
-        queue_name = self._settings.kueue_local_queue_for_workload_kind("headless")
-        chunk = self._settings.campaign_expand_chunk_size
-        min_interval = 1.0 / self._settings.campaign_expand_rps if self._settings.campaign_expand_rps > 0 else 0.0
-        last_create = 0.0
-
-        for i in range(0, len(items), chunk):
-            batch = items[i : i + chunk]
-            for item in batch:
-                item_key = str(item["item_key"])
-                if self._repository.submission_exists_for_campaign_item(campaign_id, item_key):
-                    continue
-
-                submission_id = str(uuid.uuid4())
-                job_id = str(uuid.uuid4())
-                job_env = build_job_envelope(
-                    envelope,
-                    item,
-                    submission_id=submission_id,
-                    job_id=job_id,
-                )
-                try:
-                    job_env["workload"] = normalize_workload_networking(job_env["workload"])
-                except ValueError as e:
-                    self._repository.record_campaign_item_failed(
-                        campaign_id,
-                        item_key=item_key,
-                        detail=str(e),
-                    )
-                    continue
-
-                self._repository.record_received(
-                    job_env,
-                    queue_name=queue_name,
-                    cluster_id=self._settings.cluster_id,
-                    redis_message_id=message_id,
-                    campaign_id=campaign_id,
-                    item_key=item_key,
-                )
-                self._repository.adjust_campaign_status_count(campaign_id, "received", 1)
-
-                if self._submitter is None:
-                    continue
-
-                if min_interval > 0:
-                    elapsed = time.monotonic() - last_create
-                    if elapsed < min_interval:
-                        time.sleep(min_interval - elapsed)
-
-                self._repository.mark_building_spec(submission_id)
-                try:
-                    job, access_desc = self._submitter.submit(job_env)
-                    last_create = time.monotonic()
-                    self._repository.mark_k8s_created(
-                        submission_id,
-                        job_name=job.metadata.name or "",
-                        namespace=self._settings.k8s_namespace,
-                        job_uid=job.metadata.uid or "",
-                        resource_version=job.metadata.resource_version,
-                        queue_name=queue_name,
-                    )
-                    if access_desc.public_url:
-                        self._repository.update_submission_access_url(
-                            submission_id, access_desc.public_url
-                        )
-                    self._repository.transition_campaign_submission_status(
-                        campaign_id,
-                        submission_id,
-                        old_status="received",
-                        new_status="submitted_to_cluster",
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "campaign item k8s create failed campaign_id=%s item_key=%s: %s",
-                        campaign_id,
-                        item_key,
-                        e,
-                    )
-                    self._repository.mark_k8s_create_failed(submission_id, str(e))
-
+        self._expand_jobset(campaign_id, envelope, message_id, items)
         self._repository.finalize_campaign_expansion(campaign_id)
+
+    def _resume_jobset(self, campaign_id: str, envelope: dict[str, Any]) -> None:
+        entries = self._repository.list_campaign_manifest_entries(campaign_id)
+        if not entries or self._jobset_submitter is None:
+            return
+        items = _resolve_items(envelope, self._settings)
+        by_key = {str(it["item_key"]): it for it in items}
+        manifest_entries: list[dict[str, Any]] = []
+        for entry in entries:
+            item = by_key.get(str(entry["item"]["item_key"]))
+            if item is None:
+                continue
+            manifest_entries.append({**entry, "item": item})
+        if not manifest_entries:
+            return
+        queue_name = self._settings.kueue_local_queue_for_workload_kind("headless")
+        try:
+            result = self._jobset_submitter.submit_campaign(envelope, manifest_entries=manifest_entries)
+            self._repository.mark_campaign_jobset_created(
+                campaign_id,
+                jobset_name=result["jobset_name"],
+                jobset_uid=result["jobset_uid"],
+                configmap_name=result["configmap_name"],
+                namespace=self._settings.k8s_namespace,
+                resource_version=result.get("resource_version"),
+                queue_name=queue_name,
+                child_job_name=result["child_job_name"],
+            )
+        except Exception as e:
+            logger.warning("campaign JobSet resume failed campaign_id=%s: %s", campaign_id, e)
+            self._repository.mark_campaign_jobset_create_failed(campaign_id, str(e))
+
+    def _expand_jobset(
+        self,
+        campaign_id: str,
+        envelope: dict[str, Any],
+        message_id: str,
+        items: list[dict[str, Any]],
+    ) -> None:
+        queue_name = self._settings.kueue_local_queue_for_workload_kind("headless")
+        manifest_entries: list[dict[str, Any]] = []
+
+        for index, item in enumerate(items):
+            item_key = str(item["item_key"])
+            if self._repository.submission_exists_for_campaign_item(campaign_id, item_key):
+                continue
+
+            submission_id = str(uuid.uuid4())
+            job_id = str(uuid.uuid4())
+            job_env = build_job_envelope(
+                envelope,
+                item,
+                submission_id=submission_id,
+                job_id=job_id,
+            )
+            try:
+                job_env["workload"] = normalize_workload_networking(job_env["workload"])
+            except ValueError as e:
+                self._repository.record_campaign_item_failed(
+                    campaign_id,
+                    item_key=item_key,
+                    detail=str(e),
+                )
+                continue
+
+            self._repository.record_received(
+                job_env,
+                queue_name=queue_name,
+                cluster_id=self._settings.cluster_id,
+                redis_message_id=message_id,
+                campaign_id=campaign_id,
+                item_key=item_key,
+                completion_index=index,
+            )
+            self._repository.adjust_campaign_status_count(campaign_id, "received", 1)
+            manifest_entries.append(
+                {
+                    "completion_index": index,
+                    "item": item,
+                    "submission_id": submission_id,
+                    "job_id": job_id,
+                }
+            )
+
+        if not manifest_entries or self._jobset_submitter is None:
+            return
+
+        try:
+            result = self._jobset_submitter.submit_campaign(
+                envelope,
+                manifest_entries=manifest_entries,
+            )
+            self._repository.mark_campaign_jobset_created(
+                campaign_id,
+                jobset_name=result["jobset_name"],
+                jobset_uid=result["jobset_uid"],
+                configmap_name=result["configmap_name"],
+                namespace=self._settings.k8s_namespace,
+                resource_version=result.get("resource_version"),
+                queue_name=queue_name,
+                child_job_name=result["child_job_name"],
+            )
+        except Exception as e:
+            logger.warning("campaign JobSet create failed campaign_id=%s: %s", campaign_id, e)
+            self._repository.mark_campaign_jobset_create_failed(campaign_id, str(e))

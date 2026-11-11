@@ -38,6 +38,12 @@ def _apply_update(
     core: Optional[client.CoreV1Api],
     namespace: str,
 ) -> None:
+    repository.apply_campaign_indexed_job_watch(job, deleted=deleted)
+    labels = job.metadata.labels or {} if job.metadata else {}
+    from hammrly_orchestrator.k8s.labels import LABEL_CAMPAIGN_JOBSET, VALUE_CAMPAIGN_JOBSET_INDEXED
+
+    if labels.get(LABEL_CAMPAIGN_JOBSET) == VALUE_CAMPAIGN_JOBSET_INDEXED:
+        return
     workload_error = None
     if not deleted:
         status, _ = map_job_to_submission_status(job)

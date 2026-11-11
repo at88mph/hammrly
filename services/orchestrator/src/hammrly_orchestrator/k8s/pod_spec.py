@@ -8,10 +8,13 @@ from typing import Any
 from kubernetes.client import (
     V1Affinity,
     V1Capabilities,
+    V1ConfigMapVolumeSource,
     V1Container,
     V1EmptyDirVolumeSource,
     V1EnvVar,
+    V1EnvVarSource,
     V1NodeAffinity,
+    V1ObjectFieldSelector,
     V1NodeSelector,
     V1NodeSelectorRequirement,
     V1NodeSelectorTerm,
@@ -37,13 +40,18 @@ DEFAULT_WORKSPACE_MOUNT_PATH = "/workspace"
 DEFAULT_WORKSPACE_TRANSFER_IMAGE = "python:3.12-alpine"
 DEFAULT_COMPLETION_FILE = "hammrly-complete.json"
 DEFAULT_ERROR_FILE = "hammrly-error.json"
+ITEMS_VOLUME_NAME = "hammrly-items"
+DEFAULT_ITEMS_MANIFEST_DIR = "/etc/hammrly"
+DEFAULT_ITEMS_MANIFEST_FILE = "items.json"
 
 _EPHEMERAL_STORAGE_GB_RE = re.compile(r"^([+]?(?:\d+(?:\.\d*)?|\.\d+))(?:G|GB)?$", re.IGNORECASE)
 
 _INPUT_DOWNLOADER_SCRIPT = r"""
+import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from urllib.request import urlopen
@@ -51,7 +59,27 @@ from urllib.request import urlopen
 workspace = Path(os.environ.get("HAMMRLY_WORKSPACE", "/workspace"))
 input_dir = Path(os.environ.get("HAMMRLY_INPUT_DIR", str(workspace / "inputs")))
 output_dir = Path(os.environ.get("HAMMRLY_OUTPUT_DIR", str(workspace / "outputs")))
-input_uri = os.environ.get("HAMMRLY_INPUT_URI", "").strip()
+
+
+def workload_from_campaign_manifest():
+    manifest_path = os.environ.get("HAMMRLY_ITEMS_MANIFEST_PATH", "").strip()
+    index_s = os.environ.get("JOB_COMPLETION_INDEX", "").strip()
+    if not manifest_path or index_s == "":
+        return None
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    items = data.get("items") or []
+    row = items[int(index_s)]
+    return row.get("workload") if isinstance(row, dict) else None
+
+
+wl = workload_from_campaign_manifest()
+if wl:
+    input_uri = str(wl.get("input_uri") or "").strip()
+    output_uri = str(wl.get("output_uri") or "").strip()
+    if output_uri:
+        os.environ["HAMMRLY_OUTPUT_URI"] = output_uri
+else:
+    input_uri = os.environ.get("HAMMRLY_INPUT_URI", "").strip()
 
 input_dir.mkdir(parents=True, exist_ok=True)
 output_dir.mkdir(parents=True, exist_ok=True)
@@ -65,8 +93,21 @@ name = Path(unquote(parts.path)).name or "input"
 target = input_dir / name
 
 if parts.scheme in ("http", "https"):
-    with urlopen(input_uri) as response, target.open("wb") as out:
-        shutil.copyfileobj(response, out)
+    http_timeout = float(os.environ.get("HAMMRLY_INPUT_HTTP_TIMEOUT_SECONDS", "7200"))
+    retries = int(os.environ.get("HAMMRLY_INPUT_HTTP_RETRIES", "3"))
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urlopen(input_uri, timeout=http_timeout) as response, target.open("wb") as out:
+                shutil.copyfileobj(response, out)
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                time.sleep(min(30, 2 ** attempt))
+    if last_err is not None:
+        raise SystemExit(f"HTTP input download failed after {retries} attempts: {last_err}")
 elif parts.scheme == "file":
     source = Path(unquote(parts.path))
     if source.is_dir():
@@ -102,6 +143,24 @@ completion_file = Path(os.environ.get("HAMMRLY_COMPLETION_FILE", str(workspace /
 error_file = Path(os.environ.get("HAMMRLY_ERROR_FILE", str(workspace / "hammrly-error.json")))
 default_output_uri = os.environ.get("HAMMRLY_OUTPUT_URI", "").strip()
 poll_seconds = float(os.environ.get("HAMMRLY_WORKSPACE_POLL_SECONDS", "2"))
+
+
+def workload_from_campaign_manifest():
+    manifest_path = os.environ.get("HAMMRLY_ITEMS_MANIFEST_PATH", "").strip()
+    index_s = os.environ.get("JOB_COMPLETION_INDEX", "").strip()
+    if not manifest_path or index_s == "":
+        return None
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    items = data.get("items") or []
+    row = items[int(index_s)]
+    return row.get("workload") if isinstance(row, dict) else None
+
+
+_wl = workload_from_campaign_manifest()
+if _wl:
+    _out = str(_wl.get("output_uri") or "").strip()
+    if _out:
+        default_output_uri = _out
 
 
 def read_json(path):
@@ -196,6 +255,49 @@ for item in output_items(payload):
     count += 1
 
 print(f"Processed completion file; uploaded {count} output(s)")
+""".strip()
+
+_CAMPAIGN_WORKLOAD_ENTRY_SCRIPT = r"""
+import json
+import os
+import sys
+from pathlib import Path
+
+manifest_path = os.environ.get("HAMMRLY_ITEMS_MANIFEST_PATH", "").strip()
+index_s = os.environ.get("JOB_COMPLETION_INDEX", "").strip()
+if not manifest_path or index_s == "":
+    raise SystemExit("campaign indexed pod requires HAMMRLY_ITEMS_MANIFEST_PATH and JOB_COMPLETION_INDEX")
+
+data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+items = data.get("items") or []
+row = items[int(index_s)]
+wl = row.get("workload") if isinstance(row, dict) else None
+if not isinstance(wl, dict):
+    raise SystemExit("campaign manifest row missing workload")
+
+item_env = row.get("env")
+if isinstance(item_env, dict):
+    for k, v in item_env.items():
+        if isinstance(k, str) and isinstance(v, str):
+            os.environ[k] = v
+
+ko = wl.get("kind_options") if isinstance(wl.get("kind_options"), dict) else {}
+batch = ko.get("batch") if isinstance(ko.get("batch"), dict) else {}
+cmd = batch.get("command")
+args = batch.get("args")
+if cmd and isinstance(cmd, list) and cmd:
+    argv = [str(x) for x in cmd]
+    if isinstance(args, list) and args:
+        argv.extend(str(x) for x in args)
+    os.execvp(argv[0], argv)
+
+image = str(wl.get("image") or "").strip()
+if not image:
+    raise SystemExit("campaign indexed workload missing image and batch.command")
+argv = [image]
+if isinstance(args, list) and args:
+    argv.extend(str(x) for x in args)
+os.execvp(argv[0], argv)
 """.strip()
 
 
@@ -377,12 +479,47 @@ def _workspace_child_path(workspace_mount_path: str, child: str) -> str:
     return f"{workspace_mount_path.rstrip('/')}/{child}"
 
 
+def _items_manifest_file_path(manifest_mount_dir: str = DEFAULT_ITEMS_MANIFEST_DIR) -> str:
+    return f"{manifest_mount_dir.rstrip('/')}/{DEFAULT_ITEMS_MANIFEST_FILE}"
+
+
+def _campaign_index_env_vars(*, manifest_mount_dir: str = DEFAULT_ITEMS_MANIFEST_DIR) -> list[V1EnvVar]:
+    return [
+        V1EnvVar(name="HAMMRLY_ITEMS_MANIFEST_PATH", value=_items_manifest_file_path(manifest_mount_dir)),
+        V1EnvVar(
+            name="JOB_COMPLETION_INDEX",
+            value_from=V1EnvVarSource(
+                field_ref=V1ObjectFieldSelector(
+                    field_path="metadata.labels['batch.kubernetes.io/job-completion-index']",
+                )
+            ),
+        ),
+    ]
+
+
+def items_configmap_volume(configmap_name: str) -> V1Volume:
+    return V1Volume(
+        name=ITEMS_VOLUME_NAME,
+        config_map=V1ConfigMapVolumeSource(name=configmap_name),
+    )
+
+
+def _items_volume_mount(manifest_mount_dir: str = DEFAULT_ITEMS_MANIFEST_DIR) -> V1VolumeMount:
+    return V1VolumeMount(
+        name=ITEMS_VOLUME_NAME,
+        mount_path=manifest_mount_dir,
+        read_only=True,
+    )
+
+
 def _workspace_env_vars(
     workload: dict[str, Any],
     *,
     workspace_mount_path: str,
     completion_file: str,
     error_file: str,
+    campaign_indexed: bool = False,
+    manifest_mount_dir: str = DEFAULT_ITEMS_MANIFEST_DIR,
 ) -> list[V1EnvVar]:
     input_uri = str(workload.get("input_uri") or "").strip()
     output_uri = str(workload.get("output_uri") or "").strip()
@@ -393,10 +530,13 @@ def _workspace_env_vars(
         V1EnvVar(name="HAMMRLY_COMPLETION_FILE", value=_workspace_child_path(workspace_mount_path, completion_file)),
         V1EnvVar(name="HAMMRLY_ERROR_FILE", value=_workspace_child_path(workspace_mount_path, error_file)),
     ]
-    if input_uri:
-        env.append(V1EnvVar(name="HAMMRLY_INPUT_URI", value=input_uri))
-    if output_uri:
-        env.append(V1EnvVar(name="HAMMRLY_OUTPUT_URI", value=output_uri))
+    if not campaign_indexed:
+        if input_uri:
+            env.append(V1EnvVar(name="HAMMRLY_INPUT_URI", value=input_uri))
+        if output_uri:
+            env.append(V1EnvVar(name="HAMMRLY_OUTPUT_URI", value=output_uri))
+    else:
+        env.extend(_campaign_index_env_vars(manifest_mount_dir=manifest_mount_dir))
     return env
 
 
@@ -429,7 +569,11 @@ def input_downloader_container(
     error_file: str,
     run_as_user: int,
     run_as_group: int,
+    campaign_indexed: bool = False,
 ) -> V1Container:
+    mounts = [_workspace_volume_mount(workspace_mount_path)]
+    if campaign_indexed:
+        mounts.append(_items_volume_mount())
     return V1Container(
         name="input-downloader",
         image=image,
@@ -439,8 +583,9 @@ def input_downloader_container(
             workspace_mount_path=workspace_mount_path,
             completion_file=completion_file,
             error_file=error_file,
+            campaign_indexed=campaign_indexed,
         ),
-        volume_mounts=[_workspace_volume_mount(workspace_mount_path)],
+        volume_mounts=mounts,
         security_context=workload_container_security_context(
             run_as_user=run_as_user,
             run_as_group=run_as_group,
@@ -457,7 +602,11 @@ def output_watcher_container(
     error_file: str,
     run_as_user: int,
     run_as_group: int,
+    campaign_indexed: bool = False,
 ) -> V1Container:
+    mounts = [_workspace_volume_mount(workspace_mount_path)]
+    if campaign_indexed:
+        mounts.append(_items_volume_mount())
     return V1Container(
         name="output-watcher",
         image=image,
@@ -467,8 +616,9 @@ def output_watcher_container(
             workspace_mount_path=workspace_mount_path,
             completion_file=completion_file,
             error_file=error_file,
+            campaign_indexed=campaign_indexed,
         ),
-        volume_mounts=[_workspace_volume_mount(workspace_mount_path)],
+        volume_mounts=mounts,
         security_context=workload_container_security_context(
             run_as_user=run_as_user,
             run_as_group=run_as_group,
@@ -528,6 +678,8 @@ def build_pod_template(
     ingress_path: str = "",
     ingress_auth_disable_jupyter_token: bool = False,
     desktop_shm_size: str = DEFAULT_DESKTOP_SHM_SIZE,
+    campaign_indexed: bool = False,
+    items_configmap_name: str = "",
 ) -> V1PodTemplateSpec:
     name = str(workload["name"])
     image = str(workload["image"])
@@ -541,7 +693,13 @@ def build_pod_template(
     res_req = resource_map_to_requirements(resources)
 
     cmd, args = container_command_args(workload)
+    if campaign_indexed:
+        cmd, args = ["python", "-c", _CAMPAIGN_WORKLOAD_ENTRY_SCRIPT], None
     from hammrly_orchestrator.k8s.probes import apply_workload_networking_to_container
+
+    workload_mounts = [_workspace_volume_mount(workspace_mount_path)]
+    if campaign_indexed:
+        workload_mounts.append(_items_volume_mount())
 
     container = V1Container(
         name="workload",
@@ -554,8 +712,9 @@ def build_pod_template(
             workspace_mount_path=workspace_mount_path,
             completion_file=workspace_completion_file,
             error_file=workspace_error_file,
+            campaign_indexed=campaign_indexed,
         ),
-        volume_mounts=[_workspace_volume_mount(workspace_mount_path)],
+        volume_mounts=workload_mounts,
         security_context=workload_container_security_context(
             run_as_user=job_run_as_user,
             run_as_group=job_run_as_group,
@@ -581,6 +740,7 @@ def build_pod_template(
         error_file=workspace_error_file,
         run_as_user=job_run_as_user,
         run_as_group=job_run_as_group,
+        campaign_indexed=campaign_indexed,
     )
     sidecar = output_watcher_container(
         workload,
@@ -590,6 +750,7 @@ def build_pod_template(
         error_file=workspace_error_file,
         run_as_user=job_run_as_user,
         run_as_group=job_run_as_group,
+        campaign_indexed=campaign_indexed,
     )
 
     annotations: dict[str, str] = {}
@@ -608,6 +769,10 @@ def build_pod_template(
     tolerations = _nvidia_gpu_tolerations() if gpu_n > 0 else None
 
     volumes = [workspace_volume()]
+    if campaign_indexed:
+        if not items_configmap_name:
+            raise ValueError("campaign_indexed requires items_configmap_name")
+        volumes.append(items_configmap_volume(items_configmap_name))
     if workload.get("kind") == "desktop":
         volumes.append(desktop_shm_volume(size_limit=desktop_shm_size))
 
