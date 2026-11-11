@@ -6,7 +6,8 @@
 #
 # Images are published as:
 #   ghcr.io/<owner>/<repo>/{gateway,orchestrator,query,catalog,portal}:{tag,latest}
-#   ghcr.io/<owner>/<repo>/{desktop-base,desktop-astronomy}:{tag,latest}
+#
+# Desktop images are built outside this workflow.
 #
 # Helm charts (gateway, orchestrator, query, catalog, portal, stack) are
 # packaged and pushed as OCI artifacts to GitHub Container Registry:
@@ -128,107 +129,11 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.resolve-tag.outputs.tag }}
 
-  build-push-desktop-base:
-    name: Push desktop-base
-    needs: resolve-tag
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-tag.outputs.tag }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: images/desktop/base/Dockerfile
-          push: true
-          tags: |
-            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
-            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:latest
-          cache-from: |
-            type=gha,scope=release-desktop-base
-            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:buildcache
-          cache-to: |
-            type=gha,mode=max,scope=release-desktop-base
-            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:buildcache,mode=max
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.resolve-tag.outputs.tag }}
-
-  build-push-desktop-astronomy:
-    name: Push desktop-astronomy
-    needs: [resolve-tag, build-push-desktop-base]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-tag.outputs.tag }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: images/desktop/astronomy/Dockerfile
-          push: true
-          build-args: |
-            BASE_IMAGE=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-base:${{ needs.resolve-tag.outputs.tag }}
-          tags: |
-            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:${{ needs.resolve-tag.outputs.tag }}
-            ${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:latest
-          cache-from: |
-            type=gha,scope=release-desktop-astronomy
-            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:buildcache
-          cache-to: |
-            type=gha,mode=max,scope=release-desktop-astronomy
-            type=registry,ref=${{ needs.resolve-tag.outputs.image_prefix }}/desktop-astronomy:buildcache,mode=max
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.resolve-tag.outputs.tag }}
-
-  # Disabled until a GPU-enabled runner is available (matches former GitLab job).
-  # build-push-desktop-gpu:
-  #   name: Push desktop-astronomy-gpu
-  #   needs: [resolve-tag, build-push-desktop-astronomy]
-  #   runs-on: ubuntu-latest
-  #   steps: ...
-
   helm-publish:
     name: Publish Helm charts
     needs:
       - resolve-tag
       - build-push-services
-      - build-push-desktop-astronomy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch
