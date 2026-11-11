@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0006_campaign_jobset"
-down_revision = "0005_user_notifications"
+down_revision = "0005"
 branch_labels = None
 depends_on = None
 
